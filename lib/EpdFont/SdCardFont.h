@@ -39,7 +39,13 @@ class SdCardFont {
   bool hasAdvanceTable() const;
 
   // Free mini data for all styles, restore stub EpdFontData.
+  // Also clears the temporary advance table (built per layout pass) but
+  // preserves the persistent advance cache (reused across passes).
   void clearCache();
+
+  // Drop the persistent advance cache. Call when unloading the SD font or
+  // when font/size/family/glyph-table state changes.
+  void clearPersistentCache();
 
   // Returns pointer to the managed EpdFont for a given style.
   // Returns nullptr if the style is not present.
@@ -180,9 +186,17 @@ class SdCardFont {
     uint32_t codepoint;
     uint16_t advanceX;  // 12.4 fixed-point
   };
+  // Per-style advance table. Sorted by codepoint for binary lookup.
+  // Bounded to ADVANCE_CACHE_LIMIT entries; persists across layout passes
+  // (across calls to clearCache()) so repeated indexing of the same font
+  // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
+  static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
   uint32_t advanceTableSize_[MAX_STYLES] = {};
-  void clearAdvanceTables();
+  bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
+  // Merge sortedNew (sorted by codepoint, no overlap with existing) into the
+  // advance table for styleIdx, preserving sort order; cap-truncates the tail.
+  void mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount);
 
   Stats stats_;
   uint32_t contentHash_ = 0;
