@@ -9,9 +9,6 @@ name: Build & Publish SD Card Fonts
 # classic PAT) with contents:write permission on the target fonts repo.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feature/sd-fonts-v1 # remove when merging to main
 
 env:
   FONTS_REPO: crosspoint-reader/crosspoint-fonts
