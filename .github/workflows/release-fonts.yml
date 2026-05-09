@@ -10,12 +10,6 @@ on:
     branches:
       - feature/sd-fonts-v1 # remove when merging to main
 
-# metadata & binary version numbers to use for release
-env:
-  VERSION_METADATA: 1
-  VERSION_BINARY_FORMAT: 4
-  
-  
 jobs:
   build-fonts:
     runs-on: ubuntu-latest
@@ -37,6 +31,13 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfreetype6-dev
 
+      - name: Read version constants
+        id: versions
+        run: |
+          cd lib/EpdFont/scripts
+          echo "binary=$(python3 -c 'from cpfont_version import CPFONT_VERSION; print(CPFONT_VERSION)')" >> "$GITHUB_OUTPUT"
+          echo "metadata=$(python3 -c 'from cpfont_version import FONTS_MANIFEST_VERSION; print(FONTS_MANIFEST_VERSION)')" >> "$GITHUB_OUTPUT"
+
       - name: Build SD card fonts
         run: python3 lib/EpdFont/scripts/build-sd-fonts.py --clean
 
@@ -49,15 +50,15 @@ jobs:
         run: >
           python3 scripts/generate-font-manifest.py
           --input dist
-          --base-url "https://github.com/${{ github.repository }}/releases/download/sd-fonts-m${{ env.VERSION_METADATA }}-b${{ env.VERSION_BINARY_FORMAT }}/"
+          --base-url "https://github.com/${{ github.repository }}/releases/download/sd-fonts-m${{ steps.versions.outputs.metadata }}-b${{ steps.versions.outputs.binary }}/"
           --output dist/fonts.json
           --descriptions-from lib/EpdFont/scripts/sd-fonts.yaml
 
       - name: Publish to sd-fonts release
         uses: softprops/action-gh-release@v2.5.0
         with:
-          tag_name: sd-fonts-m${{ env.VERSION_METADATA }}-b${{ env.VERSION_BINARY_FORMAT }}
-          name: SD Card Fonts (m${{ env.VERSION_METADATA }}-b${{ env.VERSION_BINARY_FORMAT }})
+          tag_name: sd-fonts-m${{ steps.versions.outputs.metadata }}-b${{ steps.versions.outputs.binary }}
+          name: SD Card Fonts (m${{ steps.versions.outputs.metadata }}-b${{ steps.versions.outputs.binary }})
           body: |
             Pre-built `.cpfont` font files for CrossPoint Reader.
 

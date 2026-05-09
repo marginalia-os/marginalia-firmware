@@ -8,8 +8,10 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// JSON schema version of the fonts.json manifest. Bump when the manifest
-// shape changes. Mirrored by scripts/generate-font-manifest.py.
+// JSON schema version of the fonts.json manifest. The canonical version for
+// the build tooling lives in lib/EpdFont/scripts/cpfont_version.py. This
+// firmware-side copy must be bumped manually when the firmware is updated to
+// support a new manifest schema.
 #define FONTS_MANIFEST_VERSION 1
 
 #ifndef FONT_MANIFEST_URL
