@@ -1019,7 +1019,7 @@ uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   return 0;
 }
 
-int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask) {
+int SdCardFont::buildAdvanceTable(const std::vector<std::string>& words, bool includeHyphen, uint8_t styleMask) {
   if (!loaded_) return -1;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
@@ -1034,8 +1034,9 @@ int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask) {
   // The dedup buffer is sized to the cap, not total chars — a large EPUB section
   // may contain 50K+ characters but real text has far fewer unique codepoints.
   // 4096 × 4 bytes = 16KB temporary; bounded regardless of input size.
+  // +2 reserved slots for space and hyphen injected after the main scan.
   static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  uint32_t* codepoints = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS];
+  uint32_t* codepoints = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS + 2];
   if (!codepoints) {
     LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", MAX_UNIQUE_CODEPOINTS * 4);
     return -1;
@@ -1047,26 +1048,37 @@ int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask) {
   // Bounded by uniqueCount × totalChars comparisons. For 2000 unique from 2291 total,
   // worst case ~4.6M comparisons of uint32_t — ~30ms on 160MHz RISC-V, acceptable
   // for one-time section indexing.
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(utf8Text);
-  while (*p) {
-    uint32_t cp = utf8NextCodepoint(&p);
-    if (cp == 0) break;
+  for (size_t wi = 0; wi < words.size() && !hitCap; wi++) {
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(words[wi].c_str());
+    while (*p) {
+      uint32_t cp = utf8NextCodepoint(&p);
+      if (cp == 0) break;
 
-    bool found = false;
-    for (uint32_t i = 0; i < cpCount; i++) {
-      if (codepoints[i] == cp) {
-        found = true;
-        break;
+      bool found = false;
+      for (uint32_t i = 0; i < cpCount; i++) {
+        if (codepoints[i] == cp) {
+          found = true;
+          break;
+        }
       }
-    }
-    if (!found) {
-      if (cpCount >= MAX_UNIQUE_CODEPOINTS) {
-        hitCap = true;
-        break;
+      if (!found) {
+        if (cpCount >= MAX_UNIQUE_CODEPOINTS) {
+          hitCap = true;
+          break;
+        }
+        codepoints[cpCount++] = cp;
       }
-      codepoints[cpCount++] = cp;
     }
   }
+
+  // Space and hyphen are needed for inter-word spacing and hyphenation
+  // measurement but may not appear in any word token.  These use the +2
+  // reserved slots so they are always present regardless of hitCap.
+  if (words.size() > 1 && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }))
+    codepoints[cpCount++] = ' ';
+  if (includeHyphen && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == '-'; }))
+    codepoints[cpCount++] = '-';
+
   if (hitCap) {
     LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
             MAX_UNIQUE_CODEPOINTS);
