@@ -201,6 +201,13 @@ PackageManifest PackageStore::readManifest(const std::string& packageDir, const 
   manifest.execution = doc["execution"].as<const char*>();
   manifest.summary = doc["summary"] | "";
   manifest.author = doc["author"] | "";
+  JsonArray permissions = doc["permissions"].as<JsonArray>();
+  for (JsonVariant permission : permissions) {
+    if (permission.is<const char*>()) {
+      manifest.permissions.push_back(permission.as<const char*>());
+    }
+  }
+  manifest.hasSettings = doc["settings"].is<JsonArray>() && doc["settings"].size() > 0;
   manifest.enabled = readPackageEnabled(manifest.id);
   manifest.compatibilityError = compatibilityError(doc);
   manifest.compatible = manifest.compatibilityError.empty();

@@ -3,15 +3,23 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
+#include <iterator>
+#include <utility>
+
 #include "MappedInputManager.h"
+#include "PackageDetailActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "marginalia/PackageThemeHost.h"
+
+PackageListActivity::PackageListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, StrId title,
+                                         std::string kindFilter)
+    : Activity("PackageList", renderer, mappedInput), title_(title), kindFilter_(std::move(kindFilter)) {}
 
 void PackageListActivity::onEnter() {
   Activity::onEnter();
   selectedIndex_ = 0;
-  packageStore_.scan();
+  refreshPackages();
   requestUpdate();
 }
 
@@ -23,16 +31,16 @@ void PackageListActivity::loop() {
     return;
   }
 
-  const int packageCount = static_cast<int>(packageStore_.packages().size());
+  const int packageCount = static_cast<int>(visiblePackages_.size());
   if (packageCount <= 0) return;
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    const auto& package = packageStore_.packages()[selectedIndex_];
-    if (package.compatible && Marginalia::setPackageEnabled(package.id, !package.enabled)) {
-      Marginalia::markPackageThemeHostDirty();
-      packageStore_.scan();
+    const auto& package = visiblePackages_[selectedIndex_];
+    auto resultHandler = [this](const ActivityResult&) {
+      refreshPackages();
       requestUpdate();
-    }
+    };
+    startActivityForResult(std::make_unique<PackageDetailActivity>(renderer, mappedInput, package), resultHandler);
     return;
   }
 
@@ -59,15 +67,25 @@ void PackageListActivity::loop() {
   });
 }
 
+void PackageListActivity::refreshPackages() {
+  packageStore_.scan();
+  visiblePackages_.clear();
+  std::copy_if(packageStore_.packages().begin(), packageStore_.packages().end(), std::back_inserter(visiblePackages_),
+               [this](const auto& package) { return kindFilter_.empty() || package.kind == kindFilter_; });
+  if (!visiblePackages_.empty() && selectedIndex_ >= static_cast<int>(visiblePackages_.size())) {
+    selectedIndex_ = static_cast<int>(visiblePackages_.size()) - 1;
+  }
+}
+
 void PackageListActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  const auto& packages = packageStore_.packages();
+  const auto& packages = visiblePackages_;
 
   renderer.clearScreen();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_PACKAGES),
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, I18N[title_],
                  Marginalia::PACKAGE_ROOT);
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
