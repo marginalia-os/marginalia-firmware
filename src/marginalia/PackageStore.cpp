@@ -8,23 +8,29 @@ namespace Marginalia {
 
 namespace {
 
+bool isAlphaNum(const char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); }
+
 bool hasRequiredString(JsonDocument& doc, const char* key) {
   return doc[key].is<const char*>() && doc[key].as<const char*>()[0] != '\0';
 }
 
 }  // namespace
 
-void PackageStore::scan() {
+void PackageStore::scan() { scanRoot(PACKAGE_ROOT); }
+
+void PackageStore::scanInbox() { scanRoot(PACKAGE_INBOX_ROOT); }
+
+void PackageStore::scanRoot(const char* rootPath) {
   packages_.clear();
   hadScanError_ = false;
 
-  FsFile root = Storage.open(PACKAGE_ROOT);
+  FsFile root = Storage.open(rootPath);
   if (!root) {
-    LOG_DBG("MPKG", "Package root not found: %s", PACKAGE_ROOT);
+    LOG_DBG("MPKG", "Package root not found: %s", rootPath);
     return;
   }
   if (!root.isDirectory()) {
-    LOG_ERR("MPKG", "Package root is not a directory: %s", PACKAGE_ROOT);
+    LOG_ERR("MPKG", "Package root is not a directory: %s", rootPath);
     hadScanError_ = true;
     return;
   }
@@ -44,7 +50,7 @@ void PackageStore::scan() {
 
     if (nameBuffer[0] == '.' || nameBuffer[0] == '_') continue;
 
-    std::string packageDir = std::string(PACKAGE_ROOT) + "/" + nameBuffer;
+    std::string packageDir = std::string(rootPath) + "/" + nameBuffer;
     PackageManifest manifest = readManifest(packageDir, nameBuffer);
     if (!manifest.valid) {
       hadScanError_ = true;
@@ -59,6 +65,7 @@ void PackageStore::scan() {
 PackageManifest PackageStore::readManifest(const std::string& packageDir, const std::string& packageDirName) const {
   PackageManifest manifest;
   manifest.id = packageDirName;
+  manifest.directoryName = packageDirName;
   manifest.manifestPath = packageDir + "/manifest.json";
 
   FsFile file;
@@ -106,6 +113,49 @@ PackageManifest PackageStore::readManifest(const std::string& packageDir, const 
   manifest.author = doc["author"] | "";
   manifest.valid = true;
   return manifest;
+}
+
+bool isSafePackageId(const std::string& value) {
+  if (value.length() < 2 || value.length() > 96 || !isAlphaNum(value[0])) {
+    return false;
+  }
+
+  for (const char c : value) {
+    if (isAlphaNum(c) || c == '.' || c == '_' || c == '-') {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+bool isSafePackageRelativePath(const std::string& value) {
+  if (value.empty() || value.length() > 180 || value[0] == '/' || value.find('\\') != std::string::npos ||
+      value.find("//") != std::string::npos) {
+    return false;
+  }
+
+  std::string component;
+  for (size_t i = 0; i <= value.length(); i++) {
+    const char c = (i < value.length()) ? value[i] : '/';
+    if (c == '/') {
+      if (component.empty() || component == "." || component == ".." || component[0] == '.') {
+        return false;
+      }
+      component.clear();
+      continue;
+    }
+
+    const bool safeChar = isAlphaNum(c) || c == '.' || c == '_' || c == '-';
+    if (!safeChar) return false;
+    component += c;
+  }
+  return true;
+}
+
+bool ensurePackageBaseDirectories() {
+  return Storage.ensureDirectoryExists("/.marginalia") && Storage.ensureDirectoryExists(PACKAGE_ROOT) &&
+         Storage.ensureDirectoryExists(PACKAGE_INBOX_ROOT) && Storage.ensureDirectoryExists(PACKAGE_STAGING_ROOT);
 }
 
 }  // namespace Marginalia

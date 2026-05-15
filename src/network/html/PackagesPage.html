@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Packages - Marginalia</title>
+    <style>
+      :root {
+        --font-color: #333;
+        --bg: #f5f5f5;
+        --title-color: #2c3e50;
+        --card-bg: #fff;
+        --label-color: #7f8c8d;
+        --border-color: #eee;
+        --accent-color: rgb(110, 154, 130);
+        --accent-hover-color: #5a8c73;
+        --danger-color: #e74c3c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --font-color: #f5f5f5;
+          --bg: #333;
+          --title-color: #ecf0f1;
+          --card-bg: #444;
+          --label-color: #bdc3c7;
+          --border-color: #555;
+          color-scheme: dark;
+        }
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: var(--bg);
+        color: var(--font-color);
+      }
+      h1 {
+        color: var(--title-color);
+        border-bottom: 2px solid var(--accent-color);
+        padding-bottom: 10px;
+      }
+      h2 { color: var(--title-color); margin-top: 0; }
+      h3 { margin: 0 0 6px 0; color: var(--title-color); }
+      .card {
+        background: var(--card-bg);
+        border-radius: 8px;
+        padding: 20px;
+        margin: 15px 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .nav-links {
+        margin: 20px 0;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .nav-links a {
+        padding: 10px 20px;
+        color: var(--font-color);
+        text-decoration: none;
+        border-radius: 4px;
+      }
+      .nav-links a.active {
+        background-color: var(--accent-color);
+        color: white;
+      }
+      .nav-links a:not(.active):hover {
+        background-color: var(--accent-hover-color);
+        color: white;
+      }
+      .package {
+        border-bottom: 1px solid var(--border-color);
+        padding: 12px 0;
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        align-items: center;
+      }
+      .package:last-child { border-bottom: none; }
+      .package-info { min-width: 0; }
+      .meta {
+        color: var(--label-color);
+        font-size: 0.9em;
+      }
+      .summary {
+        margin: 6px 0 0;
+        color: var(--font-color);
+      }
+      .btn {
+        padding: 7px 16px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9em;
+        flex-shrink: 0;
+      }
+      .btn-primary {
+        background: var(--accent-color);
+        color: white;
+      }
+      .btn-primary:hover { background: var(--accent-hover-color); }
+      .upload-form {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .upload-form input[type="file"] {
+        flex: 1;
+        min-width: 220px;
+      }
+      #status {
+        margin-top: 10px;
+        padding: 8px;
+        border-radius: 4px;
+        display: none;
+      }
+      .status-ok { background: #d4edda; color: #155724; display: block !important; }
+      .status-err { background: #f8d7da; color: #721c24; display: block !important; }
+      .empty { color: var(--label-color); text-align: center; padding: 20px; }
+    </style>
+  </head>
+  <body>
+    <h1>Marginalia</h1>
+
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/files">File Manager</a>
+      <a href="/settings">Settings</a>
+      <a href="/fonts">Fonts</a>
+      <a href="/packages" class="active">Packages</a>
+    </div>
+
+    <div class="card">
+      <h2>Installed Packages</h2>
+      <div id="activePackages"><p class="empty">Loading...</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Package Inbox</h2>
+      <div id="inboxPackages"><p class="empty">Loading...</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Upload Package Folder</h2>
+      <form class="upload-form" id="uploadForm">
+        <input type="file" id="packageFiles" webkitdirectory directory multiple required />
+        <button type="submit" class="btn btn-primary">Upload</button>
+      </form>
+      <p id="pickedInfo" class="meta" style="margin: 8px 0 0;"></p>
+      <div id="status"></div>
+    </div>
+
+    <script>
+      function safeId(value) {
+        return /^[A-Za-z0-9][A-Za-z0-9._-]+$/.test(value);
+      }
+
+      function safeRelPath(value) {
+        if (!value || value.startsWith('/') || value.includes('\\') || value.includes('//')) return false;
+        return value.split('/').every(part =>
+          part && part !== '.' && part !== '..' && !part.startsWith('.') && /^[A-Za-z0-9._-]+$/.test(part)
+        );
+      }
+
+      function packageRoot(files) {
+        const first = files[0];
+        const rel = first.webkitRelativePath || first.name;
+        return rel.includes('/') ? rel.split('/')[0] : 'upload';
+      }
+
+      function packageRelativePath(file, root) {
+        const rel = file.webkitRelativePath || file.name;
+        return rel.startsWith(root + '/') ? rel.slice(root.length + 1) : rel;
+      }
+
+      function renderList(elementId, packages, inbox) {
+        const el = document.getElementById(elementId);
+        el.replaceChildren();
+        if (!packages || packages.length === 0) {
+          const empty = document.createElement('p');
+          empty.className = 'empty';
+          empty.textContent = inbox ? 'No packages waiting to install' : 'No packages installed';
+          el.appendChild(empty);
+          return;
+        }
+        for (const pkg of packages) {
+          const row = document.createElement('div');
+          row.className = 'package';
+          const info = document.createElement('div');
+          info.className = 'package-info';
+          const title = document.createElement('h3');
+          title.textContent = pkg.name || pkg.id;
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = [pkg.kind, pkg.execution, pkg.version].filter(Boolean).join(' · ');
+          const summary = document.createElement('p');
+          summary.className = 'summary';
+          summary.textContent = pkg.summary || pkg.id;
+          info.appendChild(title);
+          info.appendChild(meta);
+          info.appendChild(summary);
+          row.appendChild(info);
+          if (inbox) {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-primary';
+            btn.textContent = 'Install';
+            btn.addEventListener('click', () => installPackage(pkg.directoryName || pkg.id));
+            row.appendChild(btn);
+          }
+          el.appendChild(row);
+        }
+      }
+
+      async function loadPackages() {
+        try {
+          const res = await fetch('/api/packages');
+          const data = await res.json();
+          renderList('activePackages', data.active || [], false);
+          renderList('inboxPackages', data.inbox || [], true);
+        } catch (err) {
+          document.getElementById('activePackages').textContent = 'Failed to load packages';
+          document.getElementById('inboxPackages').textContent = '';
+        }
+      }
+
+      async function installPackage(id) {
+        const status = document.getElementById('status');
+        status.className = '';
+        status.style.display = 'block';
+        status.textContent = 'Installing ' + id + '...';
+        try {
+          const res = await fetch('/api/packages/install', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({package: id})
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Install failed');
+          status.className = 'status-ok';
+          status.textContent = 'Installed ' + (data.name || data.id) + '.';
+        } catch (err) {
+          status.className = 'status-err';
+          status.textContent = err.message;
+        }
+        await loadPackages();
+      }
+
+      document.getElementById('packageFiles').addEventListener('change', function() {
+        const files = Array.from(this.files);
+        const info = document.getElementById('pickedInfo');
+        if (files.length === 0) {
+          info.textContent = '';
+          return;
+        }
+        const root = packageRoot(files);
+        info.textContent = files.length + ' file' + (files.length === 1 ? '' : 's') + ' from folder "' + root + '"';
+      });
+
+      document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const status = document.getElementById('status');
+        const files = Array.from(document.getElementById('packageFiles').files);
+        if (files.length === 0) return;
+
+        const root = packageRoot(files);
+        if (!safeId(root)) {
+          status.className = 'status-err';
+          status.style.display = 'block';
+          status.textContent = 'Folder name must be a safe package id.';
+          return;
+        }
+
+        status.className = '';
+        status.style.display = 'block';
+        let uploaded = 0;
+        for (const file of files) {
+          const relPath = packageRelativePath(file, root);
+          if (!safeRelPath(relPath)) {
+            status.className = 'status-err';
+            status.textContent = 'Unsafe package path: ' + relPath;
+            return;
+          }
+          status.textContent = 'Uploading ' + (uploaded + 1) + '/' + files.length + ': ' + relPath;
+          const formData = new FormData();
+          formData.append('file', file, file.name);
+          const params = new URLSearchParams({
+            package: root,
+            path: relPath,
+            reset: uploaded === 0 ? '1' : '0'
+          });
+          const url = '/api/packages/upload?' + params.toString();
+          const res = await fetch(url, { method: 'POST', body: formData });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            status.className = 'status-err';
+            status.textContent = data.error || 'Upload failed';
+            return;
+          }
+          uploaded++;
+        }
+
+        status.className = 'status-ok';
+        status.textContent = 'Uploaded package folder "' + root + '".';
+        await loadPackages();
+      });
+
+      loadPackages();
+    </script>
+  </body>
+</html>

@@ -48,6 +48,20 @@ class CrossPointWebServer {
     UploadState() { buffer.resize(UPLOAD_BUFFER_SIZE); }
   } upload;
 
+  struct PackageUploadState {
+    FsFile file;
+    std::string packageDir;
+    std::string relativePath;
+    std::string filePath;
+    bool valid = false;
+    size_t bytesWritten = 0;
+    static constexpr size_t BUFFER_SIZE = 4096;
+    std::vector<uint8_t> buffer;
+    size_t bufferPos = 0;
+
+    PackageUploadState() { buffer.resize(BUFFER_SIZE); }
+  };
+
   CrossPointWebServer();
   ~CrossPointWebServer();
 
@@ -115,6 +129,13 @@ class CrossPointWebServer {
   void handleFontUploadData();
   void handleFontDelete();
 
+  // Package management handlers
+  void handlePackagesPage() const;
+  void handlePackageList() const;
+  void handlePackageUpload();
+  void handlePackageUploadData();
+  void handlePackageInstall();
+
   // Font upload state
   struct FontUploadState {
     FsFile file;
@@ -129,6 +150,8 @@ class CrossPointWebServer {
 
     FontUploadState() { buffer.resize(BUFFER_SIZE); }
   } fontUpload;
+
+  PackageUploadState packageUpload;
 
   // OPDS server handlers
   void handleGetOpdsServers() const;

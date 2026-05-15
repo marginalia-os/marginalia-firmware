@@ -83,14 +83,17 @@ The firmware scans packages from the SD card:
 
 ```text
 /.marginalia/
+├── inbox/
+│   └── <upload-folder>/
+│       └── manifest.json
 └── packages/
     └── <package-id>/
         └── manifest.json
 ```
 
-The first firmware implementation only discovers and displays valid manifests in Settings. Runtime loading, install
-transactions, app launching, and permission enforcement should build on top of this store instead of introducing a
-second package location.
+Wi-Fi side loading writes package folders into `inbox/`. The user then installs an inbox package, which validates the
+manifest and moves it into `packages/` through a staging transaction. Runtime loading, app launching, and permission
+enforcement should build on top of this store instead of introducing a second package location.
 
 ## Manifest v1
 

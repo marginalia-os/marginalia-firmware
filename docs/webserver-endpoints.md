@@ -7,8 +7,12 @@ This document describes all HTTP and WebSocket endpoints available on the Margin
   - [HTTP Endpoints](#http-endpoints)
     - [GET `/` - Home Page](#get----home-page)
     - [GET `/files` - File Browser Page](#get-files---file-browser-page)
+    - [GET `/packages` - Package Manager Page](#get-packages---package-manager-page)
     - [GET `/api/status` - Device Status](#get-apistatus---device-status)
     - [GET `/api/files` - List Files](#get-apifiles---list-files)
+    - [GET `/api/packages` - List Packages](#get-apipackages---list-packages)
+    - [POST `/api/packages/upload` - Upload Package File](#post-apipackagesupload---upload-package-file)
+    - [POST `/api/packages/install` - Install Inbox Package](#post-apipackagesinstall---install-inbox-package)
     - [POST `/upload` - Upload File](#post-upload---upload-file)
     - [POST `/mkdir` - Create Folder](#post-mkdir---create-folder)
     - [POST `/delete` - Delete File or Folder](#post-delete---delete-file-or-folder)
@@ -80,12 +84,25 @@ curl http://crosspoint.local/api/status
 
 | Field      | Type   | Description                                               |
 | ---------- | ------ | --------------------------------------------------------- |
-| `version`  | string | CrossPoint firmware version                               |
+| `version`  | string | Marginalia firmware version                               |
 | `ip`       | string | Device IP address                                         |
 | `mode`     | string | `"STA"` (connected to WiFi) or `"AP"` (access point mode) |
 | `rssi`     | number | WiFi signal strength in dBm (0 in AP mode)                |
 | `freeHeap` | number | Free heap memory in bytes                                 |
 | `uptime`   | number | Seconds since device boot                                 |
+
+---
+
+### GET `/packages` - Package Manager Page
+
+Serves the package manager page for uploading package folders, viewing the package inbox, and installing packages.
+
+**Request:**
+```bash
+curl http://crosspoint.local/packages
+```
+
+**Response:** HTML page (200 OK)
 
 ---
 
@@ -127,6 +144,90 @@ curl "http://crosspoint.local/api/files?path=/Books"
 **Notes:**
 - Hidden files (starting with `.`) are automatically filtered out
 - System folders (`System Volume Information`, `XTCache`) are hidden
+
+---
+
+### GET `/api/packages` - List Packages
+
+Returns active packages and packages waiting in the inbox.
+
+**Request:**
+```bash
+curl http://crosspoint.local/api/packages
+```
+
+**Response (200 OK):**
+```json
+{
+  "root": "/.marginalia/packages",
+  "inboxRoot": "/.marginalia/inbox",
+  "activeScanError": false,
+  "inboxScanError": false,
+  "active": [
+    {
+      "id": "org.example.theme",
+      "directoryName": "org.example.theme",
+      "name": "Example Theme",
+      "version": "0.1.0",
+      "kind": "theme",
+      "execution": "module",
+      "summary": "Example package",
+      "author": "Example",
+      "manifestPath": "/.marginalia/packages/org.example.theme/manifest.json"
+    }
+  ],
+  "inbox": []
+}
+```
+
+---
+
+### POST `/api/packages/upload` - Upload Package File
+
+Uploads one file into the package inbox. The web UI sends one request per file when a package folder is selected.
+
+**Request:**
+```bash
+curl -X POST \
+  -F "file=@manifest.json" \
+  "http://crosspoint.local/api/packages/upload?package=org.example.theme&path=manifest.json"
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Description |
+| --------- | -------- | ----------- |
+| `package` | Yes | Inbox folder name. Must be a safe package id. |
+| `path` | Yes | Relative path inside the package folder. Must not contain `..`, hidden components, or unsafe path characters. |
+
+**Response (200 OK):**
+```json
+{"ok": true}
+```
+
+---
+
+### POST `/api/packages/install` - Install Inbox Package
+
+Validates an inbox package manifest and activates it under `/.marginalia/packages/<manifest id>/`.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"package":"org.example.theme"}' \
+  http://crosspoint.local/api/packages/install
+```
+
+**Response (200 OK):**
+```json
+{"ok": true, "id": "org.example.theme", "name": "Example Theme"}
+```
+
+**Notes:**
+- The install flow stages the package before activation.
+- If an older active package exists, it is backed up during the rename transaction and restored if activation fails.
+- This does not execute package code yet.
 
 ---
 

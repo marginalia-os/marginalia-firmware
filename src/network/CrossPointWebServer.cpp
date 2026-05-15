@@ -20,8 +20,10 @@
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
+#include "html/PackagesPageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
+#include "marginalia/PackageStore.h"
 
 namespace {
 // Folders/files to hide from the web interface file browser
@@ -84,6 +86,47 @@ bool isProtectedItemName(const String& name) {
     }
   }
   return false;
+}
+
+bool ensurePackageParentDirs(const std::string& packageDir, const std::string& relativePath) {
+  auto slash = relativePath.find('/');
+  while (slash != std::string::npos) {
+    const std::string partial = relativePath.substr(0, slash);
+    if (!partial.empty()) {
+      const std::string dirPath = packageDir + "/" + partial;
+      if (!Storage.ensureDirectoryExists(dirPath.c_str())) {
+        return false;
+      }
+    }
+    slash = relativePath.find('/', slash + 1);
+  }
+  return true;
+}
+
+bool flushPackageUploadBuffer(CrossPointWebServer::PackageUploadState& state) {
+  if (state.bufferPos > 0 && state.file) {
+    esp_task_wdt_reset();
+    const size_t written = state.file.write(state.buffer.data(), state.bufferPos);
+    esp_task_wdt_reset();
+    if (written != state.bufferPos) {
+      state.bufferPos = 0;
+      return false;
+    }
+    state.bufferPos = 0;
+  }
+  return true;
+}
+
+void serializePackageManifest(JsonObject doc, const Marginalia::PackageManifest& package) {
+  doc["id"] = package.id;
+  doc["directoryName"] = package.directoryName;
+  doc["name"] = package.name;
+  doc["version"] = package.version;
+  doc["kind"] = package.kind;
+  doc["execution"] = package.execution;
+  doc["summary"] = package.summary;
+  doc["author"] = package.author;
+  doc["manifestPath"] = package.manifestPath;
 }
 }  // namespace
 
@@ -172,6 +215,13 @@ void CrossPointWebServer::begin() {
   server->on("/api/fonts", HTTP_GET, [this] { handleFontList(); });
   server->on("/api/fonts/upload", HTTP_POST, [this] { handleFontUpload(); }, [this] { handleFontUploadData(); });
   server->on("/api/fonts/delete", HTTP_POST, [this] { handleFontDelete(); });
+
+  // Package management endpoints
+  server->on("/packages", HTTP_GET, [this] { handlePackagesPage(); });
+  server->on("/api/packages", HTTP_GET, [this] { handlePackageList(); });
+  server->on(
+      "/api/packages/upload", HTTP_POST, [this] { handlePackageUpload(); }, [this] { handlePackageUploadData(); });
+  server->on("/api/packages/install", HTTP_POST, [this] { handlePackageInstall(); });
 
   // OPDS server endpoints
   server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
@@ -1909,4 +1959,232 @@ void CrossPointWebServer::handleFontDelete() {
     server->send(500, "application/json", "{\"error\":\"Delete failed\"}");
     LOG_ERR("WEB", "Failed to delete font family: %s", familyName);
   }
+}
+
+// --- Package management handlers ---
+
+void CrossPointWebServer::handlePackagesPage() const {
+  sendHtmlContent(server.get(), PackagesPageHtml, sizeof(PackagesPageHtml));
+  LOG_DBG("WEB", "Served packages page");
+}
+
+void CrossPointWebServer::handlePackageList() const {
+  Marginalia::ensurePackageBaseDirectories();
+
+  Marginalia::PackageStore activeStore;
+  activeStore.scan();
+  Marginalia::PackageStore inboxStore;
+  inboxStore.scanInbox();
+
+  JsonDocument doc;
+  JsonArray active = doc["active"].to<JsonArray>();
+  JsonArray inbox = doc["inbox"].to<JsonArray>();
+  doc["root"] = Marginalia::PACKAGE_ROOT;
+  doc["inboxRoot"] = Marginalia::PACKAGE_INBOX_ROOT;
+  doc["activeScanError"] = activeStore.hadScanError();
+  doc["inboxScanError"] = inboxStore.hadScanError();
+
+  for (const auto& package : activeStore.packages()) {
+    JsonObject item = active.add<JsonObject>();
+    serializePackageManifest(item, package);
+  }
+  for (const auto& package : inboxStore.packages()) {
+    JsonObject item = inbox.add<JsonObject>();
+    serializePackageManifest(item, package);
+  }
+
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handlePackageUploadData() {
+  HTTPUpload& upload = server->upload();
+
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      esp_task_wdt_reset();
+      packageUpload.valid = false;
+      packageUpload.bytesWritten = 0;
+      packageUpload.bufferPos = 0;
+      packageUpload.packageDir.clear();
+      packageUpload.relativePath.clear();
+      packageUpload.filePath.clear();
+
+      if (!Marginalia::ensurePackageBaseDirectories()) {
+        LOG_ERR("WEB", "Failed to create package base directories");
+        break;
+      }
+
+      const std::string packageId = server->arg("package").c_str();
+      const std::string relativePath = server->arg("path").c_str();
+      if (!Marginalia::isSafePackageId(packageId) || !Marginalia::isSafePackageRelativePath(relativePath)) {
+        LOG_ERR("WEB", "Invalid package upload path: package=%s path=%s", packageId.c_str(), relativePath.c_str());
+        break;
+      }
+
+      packageUpload.packageDir = std::string(Marginalia::PACKAGE_INBOX_ROOT) + "/" + packageId;
+      packageUpload.relativePath = relativePath;
+      packageUpload.filePath = packageUpload.packageDir + "/" + relativePath;
+
+      if (server->arg("reset") == "1" && Storage.exists(packageUpload.packageDir.c_str())) {
+        Storage.removeDir(packageUpload.packageDir.c_str());
+      }
+
+      if (!Storage.ensureDirectoryExists(packageUpload.packageDir.c_str()) ||
+          !ensurePackageParentDirs(packageUpload.packageDir, relativePath)) {
+        LOG_ERR("WEB", "Failed to create package upload directories");
+        break;
+      }
+
+      if (Storage.exists(packageUpload.filePath.c_str())) {
+        Storage.remove(packageUpload.filePath.c_str());
+      }
+
+      if (!Storage.openFileForWrite("MPKG", packageUpload.filePath.c_str(), packageUpload.file)) {
+        LOG_ERR("WEB", "Failed to open package upload file: %s", packageUpload.filePath.c_str());
+        break;
+      }
+
+      packageUpload.valid = true;
+      LOG_DBG("WEB", "Package upload started: %s", packageUpload.filePath.c_str());
+      break;
+    }
+
+    case UPLOAD_FILE_WRITE: {
+      if (!packageUpload.valid) break;
+      esp_task_wdt_reset();
+
+      size_t remaining = upload.currentSize;
+      const uint8_t* src = upload.buf;
+      while (remaining > 0) {
+        const size_t space = PackageUploadState::BUFFER_SIZE - packageUpload.bufferPos;
+        const size_t chunk = (remaining < space) ? remaining : space;
+        memcpy(packageUpload.buffer.data() + packageUpload.bufferPos, src, chunk);
+        packageUpload.bufferPos += chunk;
+        src += chunk;
+        remaining -= chunk;
+
+        if (packageUpload.bufferPos >= PackageUploadState::BUFFER_SIZE) {
+          const size_t pending = packageUpload.bufferPos;
+          if (!flushPackageUploadBuffer(packageUpload)) {
+            packageUpload.valid = false;
+            break;
+          }
+          packageUpload.bytesWritten += pending;
+        }
+      }
+      break;
+    }
+
+    case UPLOAD_FILE_END: {
+      if (packageUpload.valid && packageUpload.bufferPos > 0) {
+        const size_t pending = packageUpload.bufferPos;
+        if (flushPackageUploadBuffer(packageUpload)) {
+          packageUpload.bytesWritten += pending;
+        } else {
+          packageUpload.valid = false;
+        }
+      }
+      packageUpload.file.close();
+
+      if (!packageUpload.valid && !packageUpload.filePath.empty()) {
+        Storage.remove(packageUpload.filePath.c_str());
+      }
+
+      LOG_DBG("WEB", "Package upload end: valid=%d, %zu bytes", packageUpload.valid, packageUpload.bytesWritten);
+      break;
+    }
+
+    case UPLOAD_FILE_ABORTED: {
+      packageUpload.file.close();
+      if (!packageUpload.filePath.empty()) {
+        Storage.remove(packageUpload.filePath.c_str());
+      }
+      packageUpload.valid = false;
+      LOG_DBG("WEB", "Package upload aborted");
+      break;
+    }
+  }
+}
+
+void CrossPointWebServer::handlePackageUpload() {
+  if (packageUpload.valid) {
+    server->send(200, "application/json", "{\"ok\":true}");
+  } else {
+    server->send(400, "application/json", "{\"error\":\"Invalid package upload\"}");
+  }
+}
+
+void CrossPointWebServer::handlePackageInstall() {
+  if (!Marginalia::ensurePackageBaseDirectories()) {
+    server->send(500, "application/json", "{\"error\":\"Could not create package directories\"}");
+    return;
+  }
+  if (!server->hasArg("plain")) {
+    server->send(400, "application/json", "{\"error\":\"Missing JSON body\"}");
+    return;
+  }
+
+  JsonDocument request;
+  const DeserializationError err = deserializeJson(request, server->arg("plain"));
+  if (err || !request["package"].is<const char*>()) {
+    server->send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    return;
+  }
+
+  const std::string inboxName = request["package"].as<const char*>();
+  if (!Marginalia::isSafePackageId(inboxName)) {
+    server->send(400, "application/json", "{\"error\":\"Invalid package id\"}");
+    return;
+  }
+
+  const std::string inboxPath = std::string(Marginalia::PACKAGE_INBOX_ROOT) + "/" + inboxName;
+  Marginalia::PackageStore store;
+  auto manifest = store.readManifest(inboxPath, inboxName);
+  if (!manifest.valid || !Marginalia::isSafePackageId(manifest.id)) {
+    server->send(400, "application/json", "{\"error\":\"Invalid manifest\"}");
+    return;
+  }
+
+  const std::string activePath = std::string(Marginalia::PACKAGE_ROOT) + "/" + manifest.id;
+  const std::string newPath = std::string(Marginalia::PACKAGE_STAGING_ROOT) + "/" + manifest.id + ".new";
+  const std::string oldPath = std::string(Marginalia::PACKAGE_STAGING_ROOT) + "/" + manifest.id + ".old";
+
+  if (Storage.exists(newPath.c_str())) Storage.removeDir(newPath.c_str());
+  if (Storage.exists(oldPath.c_str())) Storage.removeDir(oldPath.c_str());
+
+  if (!Storage.rename(inboxPath.c_str(), newPath.c_str())) {
+    server->send(500, "application/json", "{\"error\":\"Could not stage package\"}");
+    return;
+  }
+
+  bool hadActive = Storage.exists(activePath.c_str());
+  if (hadActive && !Storage.rename(activePath.c_str(), oldPath.c_str())) {
+    Storage.rename(newPath.c_str(), inboxPath.c_str());
+    server->send(500, "application/json", "{\"error\":\"Could not back up installed package\"}");
+    return;
+  }
+
+  if (!Storage.rename(newPath.c_str(), activePath.c_str())) {
+    if (hadActive) {
+      Storage.rename(oldPath.c_str(), activePath.c_str());
+    }
+    Storage.rename(newPath.c_str(), inboxPath.c_str());
+    server->send(500, "application/json", "{\"error\":\"Could not activate package\"}");
+    return;
+  }
+
+  if (hadActive) {
+    Storage.removeDir(oldPath.c_str());
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["id"] = manifest.id;
+  response["name"] = manifest.name;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
+  LOG_DBG("WEB", "Installed package: %s", manifest.id.c_str());
 }

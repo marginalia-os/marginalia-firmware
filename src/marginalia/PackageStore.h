@@ -6,10 +6,13 @@
 namespace Marginalia {
 
 constexpr const char* PACKAGE_ROOT = "/.marginalia/packages";
+constexpr const char* PACKAGE_INBOX_ROOT = "/.marginalia/inbox";
+constexpr const char* PACKAGE_STAGING_ROOT = "/.marginalia/staging";
 constexpr size_t MAX_MANIFEST_BYTES = 16384;
 
 struct PackageManifest {
   std::string id;
+  std::string directoryName;
   std::string name;
   std::string version;
   std::string kind;
@@ -24,14 +27,20 @@ struct PackageManifest {
 class PackageStore {
  public:
   void scan();
+  void scanInbox();
   const std::vector<PackageManifest>& packages() const { return packages_; }
   bool hadScanError() const { return hadScanError_; }
+  PackageManifest readManifest(const std::string& packageDir, const std::string& packageDirName) const;
 
  private:
   std::vector<PackageManifest> packages_;
   bool hadScanError_ = false;
 
-  PackageManifest readManifest(const std::string& packageDir, const std::string& packageDirName) const;
+  void scanRoot(const char* rootPath);
 };
+
+bool isSafePackageId(const std::string& value);
+bool isSafePackageRelativePath(const std::string& value);
+bool ensurePackageBaseDirectories();
 
 }  // namespace Marginalia
