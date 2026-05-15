@@ -14,6 +14,10 @@ bool hasRequiredString(JsonDocument& doc, const char* key) {
   return doc[key].is<const char*>() && doc[key].as<const char*>()[0] != '\0';
 }
 
+std::string packageStatePath(const std::string& packageId) {
+  return std::string(PACKAGE_STATE_ROOT) + "/" + packageId + ".json";
+}
+
 }  // namespace
 
 void PackageStore::scan() { scanRoot(PACKAGE_ROOT); }
@@ -105,12 +109,18 @@ PackageManifest PackageStore::readManifest(const std::string& packageDir, const 
   }
 
   manifest.id = doc["id"].as<const char*>();
+  if (!isSafePackageId(manifest.id)) {
+    manifest.error = "invalid package id";
+    return manifest;
+  }
+
   manifest.name = doc["name"].as<const char*>();
   manifest.version = doc["version"].as<const char*>();
   manifest.kind = doc["kind"].as<const char*>();
   manifest.execution = doc["execution"].as<const char*>();
   manifest.summary = doc["summary"] | "";
   manifest.author = doc["author"] | "";
+  manifest.enabled = readPackageEnabled(manifest.id);
   manifest.valid = true;
   return manifest;
 }
@@ -155,7 +165,68 @@ bool isSafePackageRelativePath(const std::string& value) {
 
 bool ensurePackageBaseDirectories() {
   return Storage.ensureDirectoryExists("/.marginalia") && Storage.ensureDirectoryExists(PACKAGE_ROOT) &&
-         Storage.ensureDirectoryExists(PACKAGE_INBOX_ROOT) && Storage.ensureDirectoryExists(PACKAGE_STAGING_ROOT);
+         Storage.ensureDirectoryExists(PACKAGE_INBOX_ROOT) && Storage.ensureDirectoryExists(PACKAGE_STAGING_ROOT) &&
+         Storage.ensureDirectoryExists(PACKAGE_STATE_ROOT);
+}
+
+bool readPackageEnabled(const std::string& packageId) {
+  if (!isSafePackageId(packageId)) return false;
+
+  const std::string path = packageStatePath(packageId);
+  if (!Storage.exists(path.c_str())) {
+    return true;
+  }
+
+  const String json = Storage.readFile(path.c_str());
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, json);
+  if (error) {
+    LOG_ERR("MPKG", "Package state read failed for %s: %s", packageId.c_str(), error.c_str());
+    return true;
+  }
+
+  return doc["enabled"] | true;
+}
+
+bool setPackageEnabled(const std::string& packageId, const bool enabled) {
+  if (!isSafePackageId(packageId) || !ensurePackageBaseDirectories()) {
+    return false;
+  }
+
+  const std::string packagePath = std::string(PACKAGE_ROOT) + "/" + packageId;
+  if (!Storage.exists(packagePath.c_str())) {
+    return false;
+  }
+
+  JsonDocument doc;
+  doc["schemaVersion"] = 1;
+  doc["id"] = packageId;
+  doc["enabled"] = enabled;
+
+  String json;
+  serializeJson(doc, json);
+  return Storage.writeFile(packageStatePath(packageId).c_str(), json);
+}
+
+bool uninstallPackage(const std::string& packageId) {
+  if (!isSafePackageId(packageId) || !ensurePackageBaseDirectories()) {
+    return false;
+  }
+
+  const std::string packagePath = std::string(PACKAGE_ROOT) + "/" + packageId;
+  if (!Storage.exists(packagePath.c_str())) {
+    return false;
+  }
+
+  if (!Storage.removeDir(packagePath.c_str())) {
+    return false;
+  }
+
+  const std::string statePath = packageStatePath(packageId);
+  if (Storage.exists(statePath.c_str())) {
+    Storage.remove(statePath.c_str());
+  }
+  return true;
 }
 
 }  // namespace Marginalia

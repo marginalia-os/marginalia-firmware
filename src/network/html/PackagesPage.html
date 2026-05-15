@@ -101,6 +101,21 @@
         color: white;
       }
       .btn-primary:hover { background: var(--accent-hover-color); }
+      .btn-secondary {
+        background: transparent;
+        color: var(--font-color);
+        border: 1px solid var(--border-color);
+      }
+      .btn-danger {
+        background: var(--danger-color);
+        color: white;
+      }
+      .package-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
       .upload-form {
         display: flex;
         gap: 10px;
@@ -195,7 +210,9 @@
           title.textContent = pkg.name || pkg.id;
           const meta = document.createElement('div');
           meta.className = 'meta';
-          meta.textContent = [pkg.kind, pkg.execution, pkg.version].filter(Boolean).join(' · ');
+          const parts = [pkg.kind, pkg.execution, pkg.version].filter(Boolean);
+          if (!inbox) parts.push(pkg.enabled === false ? 'disabled' : 'enabled');
+          meta.textContent = parts.join(' · ');
           const summary = document.createElement('p');
           summary.className = 'summary';
           summary.textContent = pkg.summary || pkg.id;
@@ -203,13 +220,28 @@
           info.appendChild(meta);
           info.appendChild(summary);
           row.appendChild(info);
+          const actions = document.createElement('div');
+          actions.className = 'package-actions';
           if (inbox) {
             const btn = document.createElement('button');
             btn.className = 'btn btn-primary';
             btn.textContent = 'Install';
             btn.addEventListener('click', () => installPackage(pkg.directoryName || pkg.id));
-            row.appendChild(btn);
+            actions.appendChild(btn);
+          } else {
+            const enableBtn = document.createElement('button');
+            enableBtn.className = 'btn btn-secondary';
+            enableBtn.textContent = pkg.enabled === false ? 'Enable' : 'Disable';
+            enableBtn.addEventListener('click', () => setPackageEnabled(pkg.id, pkg.enabled === false));
+            actions.appendChild(enableBtn);
+
+            const uninstallBtn = document.createElement('button');
+            uninstallBtn.className = 'btn btn-danger';
+            uninstallBtn.textContent = 'Uninstall';
+            uninstallBtn.addEventListener('click', () => uninstallPackage(pkg.id, pkg.name || pkg.id));
+            actions.appendChild(uninstallBtn);
           }
+          row.appendChild(actions);
           el.appendChild(row);
         }
       }
@@ -241,6 +273,51 @@
           if (!res.ok || !data.ok) throw new Error(data.error || 'Install failed');
           status.className = 'status-ok';
           status.textContent = 'Installed ' + (data.name || data.id) + '.';
+        } catch (err) {
+          status.className = 'status-err';
+          status.textContent = err.message;
+        }
+        await loadPackages();
+      }
+
+      async function setPackageEnabled(id, enabled) {
+        const status = document.getElementById('status');
+        status.className = '';
+        status.style.display = 'block';
+        status.textContent = (enabled ? 'Enabling ' : 'Disabling ') + id + '...';
+        try {
+          const res = await fetch('/api/packages/enable', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id, enabled})
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || 'State update failed');
+          status.className = 'status-ok';
+          status.textContent = (enabled ? 'Enabled ' : 'Disabled ') + id + '.';
+        } catch (err) {
+          status.className = 'status-err';
+          status.textContent = err.message;
+        }
+        await loadPackages();
+      }
+
+      async function uninstallPackage(id, name) {
+        if (!confirm('Uninstall ' + name + '?')) return;
+        const status = document.getElementById('status');
+        status.className = '';
+        status.style.display = 'block';
+        status.textContent = 'Uninstalling ' + id + '...';
+        try {
+          const res = await fetch('/api/packages/uninstall', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id})
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Uninstall failed');
+          status.className = 'status-ok';
+          status.textContent = 'Uninstalled ' + id + '.';
         } catch (err) {
           status.className = 'status-err';
           status.textContent = err.message;

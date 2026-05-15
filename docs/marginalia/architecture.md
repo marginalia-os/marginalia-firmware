@@ -86,14 +86,18 @@ The firmware scans packages from the SD card:
 ├── inbox/
 │   └── <upload-folder>/
 │       └── manifest.json
+├── package-state/
+│   └── <package-id>.json
 └── packages/
     └── <package-id>/
         └── manifest.json
 ```
 
 Wi-Fi side loading writes package folders into `inbox/`. The user then installs an inbox package, which validates the
-manifest and moves it into `packages/` through a staging transaction. Runtime loading, app launching, and permission
-enforcement should build on top of this store instead of introducing a second package location.
+manifest and moves it into `packages/` through a staging transaction. User-controlled lifecycle state, such as whether a
+package is enabled, lives in `package-state/` so package upgrades can replace files without resetting user intent.
+Runtime loading, app launching, and permission enforcement should build on top of this store instead of introducing a
+second package location.
 
 ## Manifest v1
 

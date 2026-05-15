@@ -17,14 +17,22 @@ void PackageListActivity::onEnter() {
 void PackageListActivity::onExit() { Activity::onExit(); }
 
 void PackageListActivity::loop() {
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back) ||
-      mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     finish();
     return;
   }
 
   const int packageCount = static_cast<int>(packageStore_.packages().size());
   if (packageCount <= 0) return;
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    const auto& package = packageStore_.packages()[selectedIndex_];
+    if (Marginalia::setPackageEnabled(package.id, !package.enabled)) {
+      packageStore_.scan();
+      requestUpdate();
+    }
+    return;
+  }
 
   const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, true);
 
@@ -78,12 +86,12 @@ void PackageListActivity::render(RenderLock&&) {
         nullptr,
         [&packages](int index) {
           const auto& package = packages[index];
-          return package.kind + " " + package.version;
+          return package.enabled ? tr(STR_ENABLED) : tr(STR_DISABLED);
         },
         true);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

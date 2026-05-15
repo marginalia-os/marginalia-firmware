@@ -13,6 +13,8 @@ This document describes all HTTP and WebSocket endpoints available on the Margin
     - [GET `/api/packages` - List Packages](#get-apipackages---list-packages)
     - [POST `/api/packages/upload` - Upload Package File](#post-apipackagesupload---upload-package-file)
     - [POST `/api/packages/install` - Install Inbox Package](#post-apipackagesinstall---install-inbox-package)
+    - [POST `/api/packages/enable` - Enable or Disable Package](#post-apipackagesenable---enable-or-disable-package)
+    - [POST `/api/packages/uninstall` - Uninstall Package](#post-apipackagesuninstall---uninstall-package)
     - [POST `/upload` - Upload File](#post-upload---upload-file)
     - [POST `/mkdir` - Create Folder](#post-mkdir---create-folder)
     - [POST `/delete` - Delete File or Folder](#post-delete---delete-file-or-folder)
@@ -173,7 +175,8 @@ curl http://crosspoint.local/api/packages
       "execution": "module",
       "summary": "Example package",
       "author": "Example",
-      "manifestPath": "/.marginalia/packages/org.example.theme/manifest.json"
+      "manifestPath": "/.marginalia/packages/org.example.theme/manifest.json",
+      "enabled": true
     }
   ],
   "inbox": []
@@ -199,6 +202,7 @@ curl -X POST \
 | --------- | -------- | ----------- |
 | `package` | Yes | Inbox folder name. Must be a safe package id. |
 | `path` | Yes | Relative path inside the package folder. Must not contain `..`, hidden components, or unsafe path characters. |
+| `reset` | No | Set to `1` on the first file of a folder upload to replace any previous inbox copy. |
 
 **Response (200 OK):**
 ```json
@@ -228,6 +232,49 @@ curl -X POST \
 - The install flow stages the package before activation.
 - If an older active package exists, it is backed up during the rename transaction and restored if activation fails.
 - This does not execute package code yet.
+
+---
+
+### POST `/api/packages/enable` - Enable or Disable Package
+
+Updates firmware-owned lifecycle state for an installed package.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"id":"org.example.theme","enabled":false}' \
+  http://crosspoint.local/api/packages/enable
+```
+
+**Response (200 OK):**
+```json
+{"ok": true, "id": "org.example.theme", "enabled": false}
+```
+
+**Notes:**
+- State is stored outside the package folder under `/.marginalia/package-state/`.
+- Disabling a package does not remove package files.
+- Runtime loaders should skip disabled packages when execution support is added.
+
+---
+
+### POST `/api/packages/uninstall` - Uninstall Package
+
+Removes an installed package and its local lifecycle state.
+
+**Request:**
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"id":"org.example.theme"}' \
+  http://crosspoint.local/api/packages/uninstall
+```
+
+**Response (200 OK):**
+```json
+{"ok": true, "id": "org.example.theme"}
+```
 
 ---
 

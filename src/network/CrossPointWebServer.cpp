@@ -127,6 +127,7 @@ void serializePackageManifest(JsonObject doc, const Marginalia::PackageManifest&
   doc["summary"] = package.summary;
   doc["author"] = package.author;
   doc["manifestPath"] = package.manifestPath;
+  doc["enabled"] = package.enabled;
 }
 }  // namespace
 
@@ -222,6 +223,8 @@ void CrossPointWebServer::begin() {
   server->on(
       "/api/packages/upload", HTTP_POST, [this] { handlePackageUpload(); }, [this] { handlePackageUploadData(); });
   server->on("/api/packages/install", HTTP_POST, [this] { handlePackageInstall(); });
+  server->on("/api/packages/enable", HTTP_POST, [this] { handlePackageEnable(); });
+  server->on("/api/packages/uninstall", HTTP_POST, [this] { handlePackageUninstall(); });
 
   // OPDS server endpoints
   server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
@@ -2187,4 +2190,72 @@ void CrossPointWebServer::handlePackageInstall() {
   serializeJson(response, json);
   server->send(200, "application/json", json);
   LOG_DBG("WEB", "Installed package: %s", manifest.id.c_str());
+}
+
+void CrossPointWebServer::handlePackageEnable() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "application/json", "{\"error\":\"Missing JSON body\"}");
+    return;
+  }
+
+  JsonDocument request;
+  const DeserializationError err = deserializeJson(request, server->arg("plain"));
+  if (err || !request["id"].is<const char*>() || !request["enabled"].is<bool>()) {
+    server->send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    return;
+  }
+
+  const std::string packageId = request["id"].as<const char*>();
+  const bool enabled = request["enabled"].as<bool>();
+  if (!Marginalia::isSafePackageId(packageId)) {
+    server->send(400, "application/json", "{\"error\":\"Invalid package id\"}");
+    return;
+  }
+
+  if (!Marginalia::setPackageEnabled(packageId, enabled)) {
+    server->send(500, "application/json", "{\"error\":\"Could not update package state\"}");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["id"] = packageId;
+  response["enabled"] = enabled;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
+  LOG_DBG("WEB", "Package %s %s", packageId.c_str(), enabled ? "enabled" : "disabled");
+}
+
+void CrossPointWebServer::handlePackageUninstall() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "application/json", "{\"error\":\"Missing JSON body\"}");
+    return;
+  }
+
+  JsonDocument request;
+  const DeserializationError err = deserializeJson(request, server->arg("plain"));
+  if (err || !request["id"].is<const char*>()) {
+    server->send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    return;
+  }
+
+  const std::string packageId = request["id"].as<const char*>();
+  if (!Marginalia::isSafePackageId(packageId)) {
+    server->send(400, "application/json", "{\"error\":\"Invalid package id\"}");
+    return;
+  }
+
+  if (!Marginalia::uninstallPackage(packageId)) {
+    server->send(500, "application/json", "{\"error\":\"Could not uninstall package\"}");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["id"] = packageId;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
+  LOG_DBG("WEB", "Uninstalled package: %s", packageId.c_str());
 }

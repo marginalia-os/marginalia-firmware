@@ -135,6 +135,8 @@ class CrossPointWebServer {
   void handlePackageUpload();
   void handlePackageUploadData();
   void handlePackageInstall();
+  void handlePackageEnable();
+  void handlePackageUninstall();
 
   // Font upload state
   struct FontUploadState {
