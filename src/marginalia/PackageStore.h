@@ -22,6 +22,8 @@ struct PackageManifest {
   std::string summary;
   std::string author;
   std::string manifestPath;
+  std::vector<std::string> permissions;
+  bool hasSettings = false;
   bool enabled = true;
   bool compatible = true;
   std::string compatibilityError;

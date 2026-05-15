@@ -62,6 +62,31 @@ Reference packages.
 - integrations
 - sample apps
 
+## RT-Thread Reference Model
+
+Marginalia uses RT-Thread as the reference model for firmware extension architecture when it fits the project. The
+important split is between core firmware, system components, extension packages, and optional runtime modules. Packages
+are the distribution unit, not the user-facing mental model.
+
+In firmware UI, this means extension-related features should be grouped under **Extensions** instead of exposing storage
+format names such as packages or archive files. Normal device settings stay in Settings. Extension-specific configuration
+belongs on the extension detail/configuration screens, with optional bridge rows from normal settings when that improves
+discovery.
+
+This follows RT-Thread's broad shape:
+
+- firmware/BSP/core capabilities are compiled into the device
+- system components provide reusable host services
+- packages add optional capabilities selected by category
+- runtime modules are introduced only when the firmware has an explicit loader/host for them
+
+Marginalia maps that to:
+
+- core firmware: reader, file browser, settings, Wi-Fi transfer, rendering, input, storage
+- system components: package store, hub catalog client, theme host, future reader hook host, future app/module runtime
+- extensions: themes, reader modules, sleep screens, integrations, and apps once app runtime support exists
+- hub: catalog, archive download, metadata, compatibility, and documentation
+
 ## Package Model
 
 Marginalia uses one package system with two execution classes:

@@ -14,6 +14,7 @@
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
+#include "settings/ExtensionsActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
@@ -171,6 +172,8 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
 void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
+
+void ActivityManager::goToExtensions() { replaceActivity(std::make_unique<ExtensionsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
