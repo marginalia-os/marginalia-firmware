@@ -63,7 +63,7 @@ void PackageSettingsActivity::loop() {
 std::string PackageSettingsActivity::settingValueLabel(const Marginalia::PackageSettingDefinition& setting) const {
   if (setting.type == Marginalia::PackageSettingType::Boolean) {
     return Marginalia::readPackageSettingBool(package_.id, setting.id, setting.defaultBool) ? tr(STR_ENABLED)
-                                                                                           : tr(STR_DISABLED);
+                                                                                            : tr(STR_DISABLED);
   }
 
   std::string value = Marginalia::readPackageSettingString(package_.id, setting.id, setting.defaultString);
