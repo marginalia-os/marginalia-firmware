@@ -39,11 +39,14 @@ bool isSha256Hex(const std::string& value) {
 
 std::string lowercase(const std::string& value) {
   std::string out = value;
-  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return out;
 }
 
-char hexNibble(const uint8_t value) { return value < 10 ? static_cast<char>('0' + value) : static_cast<char>('a' + value - 10); }
+char hexNibble(const uint8_t value) {
+  return value < 10 ? static_cast<char>('0' + value) : static_cast<char>('a' + value - 10);
+}
 
 std::string bytesToHex(const uint8_t* bytes, const size_t size) {
   std::string out;
