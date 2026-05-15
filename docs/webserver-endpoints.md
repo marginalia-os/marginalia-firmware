@@ -176,7 +176,9 @@ curl http://crosspoint.local/api/packages
       "summary": "Example package",
       "author": "Example",
       "manifestPath": "/.marginalia/packages/org.example.theme/manifest.json",
-      "enabled": true
+      "enabled": true,
+      "compatible": true,
+      "compatibilityError": ""
     }
   ],
   "inbox": []
@@ -231,6 +233,7 @@ curl -X POST \
 **Notes:**
 - The install flow stages the package before activation.
 - If an older active package exists, it is backed up during the rename transaction and restored if activation fails.
+- Packages with incompatible `target` metadata are rejected before activation.
 - This does not execute package code yet.
 
 ---

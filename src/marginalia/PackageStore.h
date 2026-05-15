@@ -10,6 +10,7 @@ constexpr const char* PACKAGE_INBOX_ROOT = "/.marginalia/inbox";
 constexpr const char* PACKAGE_STAGING_ROOT = "/.marginalia/staging";
 constexpr const char* PACKAGE_STATE_ROOT = "/.marginalia/package-state";
 constexpr size_t MAX_MANIFEST_BYTES = 16384;
+constexpr int PACKAGE_API_LEVEL = 1;
 
 struct PackageManifest {
   std::string id;
@@ -22,6 +23,8 @@ struct PackageManifest {
   std::string author;
   std::string manifestPath;
   bool enabled = true;
+  bool compatible = true;
+  std::string compatibilityError;
   bool valid = false;
   std::string error;
 };

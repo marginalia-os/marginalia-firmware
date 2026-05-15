@@ -128,6 +128,8 @@ void serializePackageManifest(JsonObject doc, const Marginalia::PackageManifest&
   doc["author"] = package.author;
   doc["manifestPath"] = package.manifestPath;
   doc["enabled"] = package.enabled;
+  doc["compatible"] = package.compatible;
+  doc["compatibilityError"] = package.compatibilityError;
 }
 }  // namespace
 
@@ -2147,6 +2149,13 @@ void CrossPointWebServer::handlePackageInstall() {
   auto manifest = store.readManifest(inboxPath, inboxName);
   if (!manifest.valid || !Marginalia::isSafePackageId(manifest.id)) {
     server->send(400, "application/json", "{\"error\":\"Invalid manifest\"}");
+    return;
+  }
+  if (!manifest.compatible) {
+    String body = "{\"error\":\"Incompatible package: ";
+    body += manifest.compatibilityError.c_str();
+    body += "\"}";
+    server->send(400, "application/json", body);
     return;
   }
 

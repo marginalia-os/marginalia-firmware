@@ -27,7 +27,7 @@ void PackageListActivity::loop() {
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     const auto& package = packageStore_.packages()[selectedIndex_];
-    if (Marginalia::setPackageEnabled(package.id, !package.enabled)) {
+    if (package.compatible && Marginalia::setPackageEnabled(package.id, !package.enabled)) {
       packageStore_.scan();
       requestUpdate();
     }
@@ -86,6 +86,7 @@ void PackageListActivity::render(RenderLock&&) {
         nullptr,
         [&packages](int index) {
           const auto& package = packages[index];
+          if (!package.compatible) return tr(STR_INCOMPATIBLE);
           return package.enabled ? tr(STR_ENABLED) : tr(STR_DISABLED);
         },
         true);

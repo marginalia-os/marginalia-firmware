@@ -101,6 +101,10 @@
         color: white;
       }
       .btn-primary:hover { background: var(--accent-hover-color); }
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
       .btn-secondary {
         background: transparent;
         color: var(--font-color);
@@ -212,10 +216,13 @@
           meta.className = 'meta';
           const parts = [pkg.kind, pkg.execution, pkg.version].filter(Boolean);
           if (!inbox) parts.push(pkg.enabled === false ? 'disabled' : 'enabled');
+          if (pkg.compatible === false) parts.push('incompatible');
           meta.textContent = parts.join(' · ');
           const summary = document.createElement('p');
           summary.className = 'summary';
-          summary.textContent = pkg.summary || pkg.id;
+          summary.textContent = pkg.compatible === false
+            ? (pkg.compatibilityError || 'Incompatible package')
+            : (pkg.summary || pkg.id);
           info.appendChild(title);
           info.appendChild(meta);
           info.appendChild(summary);
@@ -226,6 +233,7 @@
             const btn = document.createElement('button');
             btn.className = 'btn btn-primary';
             btn.textContent = 'Install';
+            btn.disabled = pkg.compatible === false;
             btn.addEventListener('click', () => installPackage(pkg.directoryName || pkg.id));
             actions.appendChild(btn);
           } else {

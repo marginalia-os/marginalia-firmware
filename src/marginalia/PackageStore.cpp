@@ -4,6 +4,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <cstdlib>
+
 namespace Marginalia {
 
 namespace {
@@ -16,6 +18,83 @@ bool hasRequiredString(JsonDocument& doc, const char* key) {
 
 std::string packageStatePath(const std::string& packageId) {
   return std::string(PACKAGE_STATE_ROOT) + "/" + packageId + ".json";
+}
+
+bool arrayContains(JsonVariantConst value, const char* expected) {
+  if (!value.is<JsonArrayConst>()) return false;
+  for (JsonVariantConst item : value.as<JsonArrayConst>()) {
+    if (item.is<const char*>() && std::string(item.as<const char*>()) == expected) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool arrayContainsAny(JsonVariantConst value, const char* first, const char* second) {
+  return arrayContains(value, first) || arrayContains(value, second);
+}
+
+bool parseVersionTriplet(const char* value, int (&parts)[3]) {
+  if (value == nullptr || value[0] == '\0') return false;
+
+  const char* cursor = value;
+  for (int i = 0; i < 3; i++) {
+    char* end = nullptr;
+    const long parsed = strtol(cursor, &end, 10);
+    if (end == cursor || parsed < 0 || parsed > 9999) {
+      return false;
+    }
+    parts[i] = static_cast<int>(parsed);
+    if (i < 2) {
+      if (*end != '.') return false;
+      cursor = end + 1;
+    }
+  }
+  return true;
+}
+
+bool firmwareMeetsMinimum(const char* minimum) {
+  int current[3] = {0, 0, 0};
+  int required[3] = {0, 0, 0};
+  if (!parseVersionTriplet(CROSSPOINT_VERSION, current) || !parseVersionTriplet(minimum, required)) {
+    return false;
+  }
+
+  for (int i = 0; i < 3; i++) {
+    if (current[i] > required[i]) return true;
+    if (current[i] < required[i]) return false;
+  }
+  return true;
+}
+
+std::string compatibilityError(JsonDocument& doc) {
+  JsonVariantConst target = doc["target"];
+  if (!target.is<JsonObjectConst>()) return "";
+
+  JsonVariantConst devices = target["devices"];
+  if (devices.is<JsonArrayConst>() && !arrayContainsAny(devices, "xteink-x3", "xteink-x4")) {
+    return "unsupported device";
+  }
+
+  JsonVariantConst chipFamilies = target["chipFamilies"];
+  if (chipFamilies.is<JsonArrayConst>() && !arrayContains(chipFamilies, "esp32-c3")) {
+    return "unsupported chip family";
+  }
+
+  const int apiLevel = target["apiLevel"] | 1;
+  if (apiLevel > PACKAGE_API_LEVEL) {
+    return "requires newer package API";
+  }
+
+  if ((target["requiresPSRAM"] | false) == true) {
+    return "requires PSRAM";
+  }
+
+  if (target["minFirmware"].is<const char*>() && !firmwareMeetsMinimum(target["minFirmware"].as<const char*>())) {
+    return "requires newer firmware";
+  }
+
+  return "";
 }
 
 }  // namespace
@@ -121,6 +200,8 @@ PackageManifest PackageStore::readManifest(const std::string& packageDir, const 
   manifest.summary = doc["summary"] | "";
   manifest.author = doc["author"] | "";
   manifest.enabled = readPackageEnabled(manifest.id);
+  manifest.compatibilityError = compatibilityError(doc);
+  manifest.compatible = manifest.compatibilityError.empty();
   manifest.valid = true;
   return manifest;
 }

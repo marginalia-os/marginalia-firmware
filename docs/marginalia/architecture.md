@@ -99,6 +99,22 @@ package is enabled, lives in `package-state/` so package upgrades can replace fi
 Runtime loading, app launching, and permission enforcement should build on top of this store instead of introducing a
 second package location.
 
+## Compatibility Gate
+
+Manifest `target` metadata is optional for early local packages. When present, firmware evaluates it before install and
+marks active packages as compatible or incompatible during scans.
+
+The current firmware accepts:
+
+- `devices`: `xteink-x3` or `xteink-x4`
+- `chipFamilies`: `esp32-c3`
+- `apiLevel`: `1` or lower
+- `requiresPSRAM`: `false`
+- `minFirmware`: less than or equal to the running firmware version
+
+Incompatible inbox packages are visible but cannot be installed. Incompatible active packages stay visible so the user
+can disable or uninstall them instead of losing track of what is on the SD card.
+
 ## Manifest v1
 
 ```json
