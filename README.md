@@ -183,7 +183,8 @@ automatically when you delete a book, and moving a file to a new path resets its
 
 Marginalia scans side-loaded packages from `/.marginalia/packages/*/manifest.json` on the SD card. Package folders and
 SDK-built `.mpkg.zip` archives can be uploaded from the local web package manager, and compatible hub entries can be
-downloaded from the package page. Archives are unpacked into the package inbox before install. Runtime hooks and app
+downloaded from the package page. Archives can also be copied to `/.marginalia/sideload/` on the SD card and installed
+from **Extensions > SD Card**. Archives are unpacked into the package inbox before install. Runtime hooks and app
 launching will be added on top of this store instead of being mixed into the package installer.
 
 For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).

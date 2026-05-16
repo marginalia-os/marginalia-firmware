@@ -9,6 +9,7 @@ constexpr const char* PACKAGE_ROOT = "/.marginalia/packages";
 constexpr const char* PACKAGE_INBOX_ROOT = "/.marginalia/inbox";
 constexpr const char* PACKAGE_STAGING_ROOT = "/.marginalia/staging";
 constexpr const char* PACKAGE_STATE_ROOT = "/.marginalia/package-state";
+constexpr const char* PACKAGE_SIDELOAD_ROOT = "/.marginalia/sideload";
 constexpr size_t MAX_MANIFEST_BYTES = 16384;
 constexpr int PACKAGE_API_LEVEL = 1;
 
@@ -78,6 +79,7 @@ std::string readPackageSettingString(const std::string& packageId, const std::st
 bool writePackageSettingBool(const std::string& packageId, const std::string& settingId, bool value);
 bool writePackageSettingString(const std::string& packageId, const std::string& settingId, const std::string& value);
 PackageInstallResult installInboxPackage(const std::string& inboxName);
+bool removeInboxPackage(const std::string& inboxName);
 bool uninstallPackage(const std::string& packageId);
 
 }  // namespace Marginalia

@@ -6,6 +6,7 @@
 #include "MappedInputManager.h"
 #include "PackageHubActivity.h"
 #include "PackageListActivity.h"
+#include "PackageSideloadActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -13,6 +14,7 @@ void ExtensionsActivity::onEnter() {
   Activity::onEnter();
   sections_ = {
       {StrId::STR_EXTENSION_HUB, StrId::STR_EXTENSION_HUB_DESC, "", true},
+      {StrId::STR_EXTENSION_SD_CARD, StrId::STR_EXTENSION_SD_CARD_DESC, "", false, true},
       {StrId::STR_INSTALLED, StrId::STR_EXTENSIONS_INSTALLED_DESC, ""},
       {StrId::STR_EXTENSION_THEMES, StrId::STR_EXTENSION_THEMES_DESC, "theme"},
       {StrId::STR_EXTENSION_READER, StrId::STR_EXTENSION_READER_DESC, "reader_module"},
@@ -73,6 +75,10 @@ void ExtensionsActivity::openSelectedSection() {
   auto resultHandler = [this](const ActivityResult&) { requestUpdate(); };
   if (section.opensHub) {
     startActivityForResult(std::make_unique<PackageHubActivity>(renderer, mappedInput), resultHandler);
+    return;
+  }
+  if (section.opensSideload) {
+    startActivityForResult(std::make_unique<PackageSideloadActivity>(renderer, mappedInput), resultHandler);
     return;
   }
   startActivityForResult(

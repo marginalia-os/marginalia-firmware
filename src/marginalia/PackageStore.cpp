@@ -355,9 +355,14 @@ bool isSafePackageRelativePath(const std::string& value) {
 }
 
 bool ensurePackageBaseDirectories() {
-  return Storage.ensureDirectoryExists("/.marginalia") && Storage.ensureDirectoryExists(PACKAGE_ROOT) &&
-         Storage.ensureDirectoryExists(PACKAGE_INBOX_ROOT) && Storage.ensureDirectoryExists(PACKAGE_STAGING_ROOT) &&
-         Storage.ensureDirectoryExists(PACKAGE_STATE_ROOT);
+  const bool coreReady = Storage.ensureDirectoryExists("/.marginalia") && Storage.ensureDirectoryExists(PACKAGE_ROOT) &&
+                         Storage.ensureDirectoryExists(PACKAGE_INBOX_ROOT) &&
+                         Storage.ensureDirectoryExists(PACKAGE_STAGING_ROOT) &&
+                         Storage.ensureDirectoryExists(PACKAGE_STATE_ROOT);
+  if (coreReady && !Storage.ensureDirectoryExists(PACKAGE_SIDELOAD_ROOT)) {
+    LOG_ERR("MPKG", "Could not create package sideload directory: %s", PACKAGE_SIDELOAD_ROOT);
+  }
+  return coreReady;
 }
 
 bool readPackageEnabled(const std::string& packageId) {
@@ -473,6 +478,18 @@ PackageInstallResult installInboxPackage(const std::string& inboxName) {
   result.packageName = manifest.name;
   LOG_DBG("MPKG", "Installed package: %s", manifest.id.c_str());
   return result;
+}
+
+bool removeInboxPackage(const std::string& inboxName) {
+  if (!isSafePackageId(inboxName) || !ensurePackageBaseDirectories()) {
+    return false;
+  }
+
+  const std::string inboxPath = std::string(PACKAGE_INBOX_ROOT) + "/" + inboxName;
+  if (!Storage.exists(inboxPath.c_str())) {
+    return true;
+  }
+  return Storage.removeDir(inboxPath.c_str());
 }
 
 bool uninstallPackage(const std::string& packageId) {

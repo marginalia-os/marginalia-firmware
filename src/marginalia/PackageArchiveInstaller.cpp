@@ -37,6 +37,16 @@ bool ensureParentDirs(const std::string& baseDir, const std::string& relativePat
 
 bool archiveMethodSupported(const ZipFile::Entry& entry) { return entry.stat.method == 0 || entry.stat.method == 8; }
 
+bool hasRequiredString(JsonDocument& doc, const char* key) {
+  return doc[key].is<const char*>() && doc[key].as<const char*>()[0] != '\0';
+}
+
+PackageArchiveInspectResult inspectError(const std::string& error) {
+  PackageArchiveInspectResult result;
+  result.error = error;
+  return result;
+}
+
 PackageArchiveInstallResult resultError(const std::string& error) {
   PackageArchiveInstallResult result;
   result.error = error;
@@ -44,6 +54,46 @@ PackageArchiveInstallResult resultError(const std::string& error) {
 }
 
 }  // namespace
+
+PackageArchiveInspectResult inspectPackageArchive(const std::string& archivePath) {
+  ZipFile zip(archivePath);
+
+  size_t manifestSize = 0;
+  std::unique_ptr<uint8_t, decltype(&free)> manifestBytes(zip.readFileToMemory("manifest.json", &manifestSize, true),
+                                                          free);
+  if (!manifestBytes) {
+    return inspectError("manifest.json missing from archive");
+  }
+  if (manifestSize == 0 || manifestSize > MAX_MANIFEST_BYTES) {
+    return inspectError("manifest.json has invalid size");
+  }
+
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, reinterpret_cast<const char*>(manifestBytes.get()));
+  if (error) {
+    return inspectError("manifest.json is invalid");
+  }
+  if ((doc["schemaVersion"] | 0) != 1) {
+    return inspectError("unsupported schema version");
+  }
+  if (!hasRequiredString(doc, "id") || !hasRequiredString(doc, "name") || !hasRequiredString(doc, "version") ||
+      !hasRequiredString(doc, "kind") || !hasRequiredString(doc, "execution")) {
+    return inspectError("required fields missing");
+  }
+
+  PackageArchiveInspectResult result;
+  result.packageId = doc["id"].as<const char*>();
+  if (!isSafePackageId(result.packageId)) {
+    return inspectError("invalid package id");
+  }
+  result.ok = true;
+  result.packageName = doc["name"].as<const char*>();
+  result.version = doc["version"].as<const char*>();
+  result.kind = doc["kind"].as<const char*>();
+  result.execution = doc["execution"].as<const char*>();
+  result.summary = doc["summary"] | "";
+  return result;
+}
 
 PackageArchiveInstallResult extractPackageArchiveToInbox(const std::string& archivePath) {
   if (!ensurePackageBaseDirectories()) {

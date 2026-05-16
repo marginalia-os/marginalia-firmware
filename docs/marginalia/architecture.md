@@ -118,16 +118,19 @@ The firmware scans packages from the SD card:
 │       └── manifest.json
 ├── package-state/
 │   └── <package-id>.json
+├── sideload/
+│   └── <package-id>-<version>.mpkg.zip
 └── packages/
     └── <package-id>/
         └── manifest.json
 ```
 
-Wi-Fi side loading writes package folders into `inbox/`. The user then installs an inbox package, which validates the
-manifest and moves it into `packages/` through a staging transaction. User-controlled lifecycle state, such as whether a
-package is enabled, lives in `package-state/` so package upgrades can replace files without resetting user intent.
-Runtime loading, app launching, and permission enforcement should build on top of this store instead of introducing a
-second package location.
+Wi-Fi side loading writes package folders into `inbox/`. SD-card side loading reads SDK-built `.mpkg.zip` archives from
+`sideload/`, extracts them into `inbox/`, and then uses the same install transaction as Hub and web installs. The user
+then installs an inbox package, which validates the manifest and moves it into `packages/` through a staging
+transaction. User-controlled lifecycle state, such as whether a package is enabled, lives in `package-state/` so package
+upgrades can replace files without resetting user intent. Runtime loading, app launching, and permission enforcement
+should build on top of this store instead of introducing a second package location.
 
 ## Package Settings
 
