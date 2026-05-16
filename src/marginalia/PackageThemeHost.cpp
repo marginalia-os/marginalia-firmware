@@ -15,22 +15,32 @@ constexpr const char* THEME_DESCRIPTOR = "src/theme.json";
 
 bool loaded = false;
 bool invertDisplay = false;
+bool halfRefresh = false;
+bool disableTextAntialiasing = false;
 
 std::string packageThemePath(const PackageManifest& package) {
   return std::string(PACKAGE_ROOT) + "/" + package.id + "/" + THEME_DESCRIPTOR;
 }
 
-bool themeDescriptorEnablesInvert(const std::string& path) {
+struct ThemeDescriptor {
+  bool invertDisplay = false;
+  bool halfRefresh = false;
+  bool disableTextAntialiasing = false;
+  bool packageTextAntialiasingSetting = false;
+};
+
+ThemeDescriptor readThemeDescriptor(const std::string& path) {
+  ThemeDescriptor descriptor;
   FsFile file;
   if (!Storage.openFileForRead("MPKG", path.c_str(), file)) {
-    return false;
+    return descriptor;
   }
 
   const size_t size = file.size();
   file.close();
   if (size == 0 || size > MAX_THEME_BYTES) {
     LOG_ERR("MPKG", "Theme descriptor has invalid size: %s", path.c_str());
-    return false;
+    return descriptor;
   }
 
   const String json = Storage.readFile(path.c_str());
@@ -38,16 +48,35 @@ bool themeDescriptorEnablesInvert(const std::string& path) {
   const DeserializationError error = deserializeJson(doc, json);
   if (error) {
     LOG_ERR("MPKG", "Theme descriptor parse failed: %s", path.c_str());
-    return false;
+    return descriptor;
   }
 
-  return (doc["schemaVersion"] | 0) == 1 && doc["scope"].is<const char*>() && doc["mode"].is<const char*>() &&
-         std::string(doc["scope"].as<const char*>()) == "os" &&
-         std::string(doc["mode"].as<const char*>()) == "invert-screen";
+  if ((doc["schemaVersion"] | 0) != 1 || !doc["scope"].is<const char*>() || !doc["mode"].is<const char*>()) {
+    return descriptor;
+  }
+  if (std::string(doc["scope"].as<const char*>()) != "os") {
+    return descriptor;
+  }
+  if (std::string(doc["mode"].as<const char*>()) == "invert-screen") {
+    descriptor.invertDisplay = true;
+  }
+  if (doc["refreshMode"].is<const char*>() && std::string(doc["refreshMode"].as<const char*>()) == "half") {
+    descriptor.halfRefresh = true;
+  }
+  if (doc["textAntialiasing"].is<const char*>() && std::string(doc["textAntialiasing"].as<const char*>()) == "off") {
+    descriptor.disableTextAntialiasing = true;
+  }
+  if (doc["textAntialiasing"].is<const char*>() &&
+      std::string(doc["textAntialiasing"].as<const char*>()) == "package-setting") {
+    descriptor.packageTextAntialiasingSetting = true;
+  }
+  return descriptor;
 }
 
 void reloadThemeState() {
   invertDisplay = false;
+  halfRefresh = false;
+  disableTextAntialiasing = false;
 
   PackageStore store;
   store.scan();
@@ -57,10 +86,16 @@ void reloadThemeState() {
     }
 
     const std::string path = packageThemePath(package);
-    if (themeDescriptorEnablesInvert(path) && readPackageSettingBool(package.id, "invertScreen", true)) {
+    const ThemeDescriptor descriptor = readThemeDescriptor(path);
+    if (descriptor.invertDisplay && readPackageSettingBool(package.id, "invertScreen", true)) {
       invertDisplay = true;
+      halfRefresh = halfRefresh || descriptor.halfRefresh;
+      disableTextAntialiasing = disableTextAntialiasing || descriptor.disableTextAntialiasing;
+      if (descriptor.packageTextAntialiasingSetting) {
+        disableTextAntialiasing =
+            disableTextAntialiasing || !readPackageSettingBool(package.id, "textAntialiasing", false);
+      }
       LOG_DBG("MPKG", "Enabled OS invert theme from package: %s", package.id.c_str());
-      break;
     }
   }
 
@@ -74,6 +109,20 @@ bool packageThemeInvertsDisplay() {
     reloadThemeState();
   }
   return invertDisplay;
+}
+
+bool packageThemeRequestsHalfRefresh() {
+  if (!loaded) {
+    reloadThemeState();
+  }
+  return halfRefresh;
+}
+
+bool packageThemeDisablesTextAntialiasing() {
+  if (!loaded) {
+    reloadThemeState();
+  }
+  return disableTextAntialiasing;
 }
 
 void markPackageThemeHostDirty() { loaded = false; }

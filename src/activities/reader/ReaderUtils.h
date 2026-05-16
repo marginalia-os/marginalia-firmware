@@ -6,6 +6,7 @@
 #include <Logging.h>
 
 #include "MappedInputManager.h"
+#include "marginalia/PackageThemeHost.h"
 
 namespace ReaderUtils {
 
@@ -62,6 +63,10 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     renderer.displayBuffer();
     pagesUntilFullRefresh--;
   }
+}
+
+inline bool textAntialiasingEnabled() {
+  return SETTINGS.textAntiAliasing && !Marginalia::packageThemeDisablesTextAntialiasing();
 }
 
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build

@@ -162,6 +162,26 @@ The state file is not part of the package archive. Package upgrades must preserv
 future settings, while new installs fall back to manifest defaults. Runtime hosts should read settings through
 `PackageStore` helpers rather than parsing state files directly.
 
+## Theme Host Contract
+
+Theme packages can include `src/theme.json` to request firmware-hosted OS rendering behavior:
+
+```json
+{
+  "schemaVersion": 1,
+  "scope": "os",
+  "mode": "invert-screen",
+  "refreshMode": "half",
+  "textAntialiasing": "package-setting"
+}
+```
+
+The firmware host only applies this contract for enabled, compatible `theme` packages. `refreshMode: "half"` promotes
+normal fast display updates to half refresh while the theme is active. `textAntialiasing: "off"` suppresses reader text
+grayscale antialiasing without overwriting the user's saved setting. `textAntialiasing: "package-setting"` reads the
+package boolean setting named `textAntialiasing`; this lets the theme expose an antialiasing toggle in its package
+settings while still keeping the normal reader setting intact.
+
 ## Compatibility Gate
 
 Manifest `target` metadata is optional for early local packages. When present, firmware evaluates it before install and
