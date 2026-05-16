@@ -22,6 +22,7 @@ class ExtensionsActivity final : public Activity {
     StrId title;
     StrId subtitle;
     std::string kindFilter;
+    bool opensHub = false;
   };
 
   std::vector<ExtensionSection> sections_;

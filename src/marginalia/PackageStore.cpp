@@ -416,6 +416,65 @@ bool writePackageSettingString(const std::string& packageId, const std::string& 
   return saved;
 }
 
+PackageInstallResult installInboxPackage(const std::string& inboxName) {
+  PackageInstallResult result;
+  if (!isSafePackageId(inboxName) || !ensurePackageBaseDirectories()) {
+    result.error = "invalid package id";
+    return result;
+  }
+
+  const std::string inboxPath = std::string(PACKAGE_INBOX_ROOT) + "/" + inboxName;
+  PackageStore store;
+  auto manifest = store.readManifest(inboxPath, inboxName);
+  if (!manifest.valid || !isSafePackageId(manifest.id)) {
+    result.error = "invalid manifest";
+    return result;
+  }
+  if (!manifest.compatible) {
+    result.error = "incompatible package: " + manifest.compatibilityError;
+    return result;
+  }
+
+  const std::string activePath = std::string(PACKAGE_ROOT) + "/" + manifest.id;
+  const std::string newPath = std::string(PACKAGE_STAGING_ROOT) + "/" + manifest.id + ".new";
+  const std::string oldPath = std::string(PACKAGE_STAGING_ROOT) + "/" + manifest.id + ".old";
+
+  if (Storage.exists(newPath.c_str())) Storage.removeDir(newPath.c_str());
+  if (Storage.exists(oldPath.c_str())) Storage.removeDir(oldPath.c_str());
+
+  if (!Storage.rename(inboxPath.c_str(), newPath.c_str())) {
+    result.error = "could not stage package";
+    return result;
+  }
+
+  const bool hadActive = Storage.exists(activePath.c_str());
+  if (hadActive && !Storage.rename(activePath.c_str(), oldPath.c_str())) {
+    Storage.rename(newPath.c_str(), inboxPath.c_str());
+    result.error = "could not back up installed package";
+    return result;
+  }
+
+  if (!Storage.rename(newPath.c_str(), activePath.c_str())) {
+    if (hadActive) {
+      Storage.rename(oldPath.c_str(), activePath.c_str());
+    }
+    Storage.rename(newPath.c_str(), inboxPath.c_str());
+    result.error = "could not activate package";
+    return result;
+  }
+
+  if (hadActive) {
+    Storage.removeDir(oldPath.c_str());
+  }
+
+  refreshPackageThemeHost();
+  result.ok = true;
+  result.packageId = manifest.id;
+  result.packageName = manifest.name;
+  LOG_DBG("MPKG", "Installed package: %s", manifest.id.c_str());
+  return result;
+}
+
 bool uninstallPackage(const std::string& packageId) {
   if (!isSafePackageId(packageId) || !ensurePackageBaseDirectories()) {
     return false;
