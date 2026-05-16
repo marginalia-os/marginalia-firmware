@@ -8,6 +8,8 @@
 #include <WiFi.h>
 #include <esp_rom_crc.h>
 
+#include <cstdio>
+
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -19,6 +21,39 @@
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
+
+namespace {
+
+bool ensureTempFamilyDir(const std::string& familyName, char* tempDir, const size_t tempDirSize) {
+  const char* root = SdCardFontRegistry::defaultWriteRoot();
+  if (!Storage.exists(root) && !Storage.mkdir(root)) {
+    LOG_ERR("FONT", "Failed to create fonts root: %s", root);
+    return false;
+  }
+
+  snprintf(tempDir, tempDirSize, "%s/_download_%s", root, familyName.c_str());
+  if (Storage.exists(tempDir) && !Storage.removeDir(tempDir)) {
+    LOG_ERR("FONT", "Failed to clear temp font dir: %s", tempDir);
+    return false;
+  }
+  if (!Storage.mkdir(tempDir)) {
+    LOG_ERR("FONT", "Failed to create temp font dir: %s", tempDir);
+    return false;
+  }
+  return true;
+}
+
+void cleanupTempFamilyDir(const char* tempDir) {
+  if (tempDir && tempDir[0] != '\0' && Storage.exists(tempDir)) {
+    Storage.removeDir(tempDir);
+  }
+}
+
+void buildTempFontPath(const char* tempDir, const std::string& filename, char* outBuf, const size_t outBufSize) {
+  snprintf(outBuf, outBufSize, "%s/%s", tempDir, filename.c_str());
+}
+
+}  // namespace
 
 // --- Lifecycle ---
 
@@ -275,10 +310,11 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   }
   requestUpdateAndWait();
 
-  if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
+  char tempDir[160];
+  if (!ensureTempFamilyDir(family.name, tempDir, sizeof(tempDir))) {
     RenderLock lock(*this);
     state_ = ERROR;
-    errorMessage_ = "Failed to create font directory";
+    errorMessage_ = "Failed to create font temp directory";
     return;
   }
 
@@ -292,13 +328,13 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     requestUpdateAndWait();
 
-    char destPath[128];
-    FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), destPath, sizeof(destPath));
+    char tempPath[192];
+    buildTempFontPath(tempDir, file.name, tempPath, sizeof(tempPath));
 
     std::string url = baseUrl_ + file.name;
 
     auto result = HttpDownloader::downloadToFile(
-        url, destPath,
+        url, tempPath,
         [this](size_t downloaded, size_t total) {
           fileProgress_ = downloaded;
           fileTotal_ = total;
@@ -312,9 +348,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
         &cancelRequested_);
 
     if (result == HttpDownloader::ABORTED) {
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      cleanupTempFamilyDir(tempDir);
       {
         RenderLock lock(*this);
         state_ = FAMILY_LIST;
@@ -324,9 +358,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     if (result != HttpDownloader::OK) {
       LOG_ERR("FONT", "Download failed: %s (%d)", file.name.c_str(), result);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Download failed: " + file.name;
@@ -334,11 +366,9 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
 
     uint32_t actualCrc = 0;
-    if (!computeFileCrc32(destPath, actualCrc)) {
-      LOG_ERR("FONT", "Failed to open file for CRC check: %s", destPath);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+    if (!computeFileCrc32(tempPath, actualCrc)) {
+      LOG_ERR("FONT", "Failed to open file for CRC check: %s", tempPath);
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Failed to compute checksum: " + file.name;
@@ -346,9 +376,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     if (actualCrc != file.crc32) {
       LOG_ERR("FONT", "CRC32 mismatch for %s: got %08x expected %08x", file.name.c_str(), actualCrc, file.crc32);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Checksum mismatch: " + file.name;
@@ -356,11 +384,9 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     LOG_DBG("FONT", "Downloaded %s (size=%zu crc32=%08x)", file.name.c_str(), file.size, actualCrc);
 
-    if (!fontInstaller_.validateCpfontFile(destPath)) {
-      LOG_ERR("FONT", "Invalid .cpfont: %s", destPath);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+    if (!fontInstaller_.validateCpfontFile(tempPath)) {
+      LOG_ERR("FONT", "Invalid .cpfont: %s", tempPath);
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Invalid font file: " + file.name;
@@ -369,6 +395,43 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     currentFileIndex_++;
   }
 
+  if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
+    cleanupTempFamilyDir(tempDir);
+    RenderLock lock(*this);
+    state_ = ERROR;
+    errorMessage_ = "Failed to create font directory";
+    return;
+  }
+
+  for (const auto& file : family.files) {
+    char tempPath[192];
+    char destPath[192];
+    char backupPath[208];
+    buildTempFontPath(tempDir, file.name, tempPath, sizeof(tempPath));
+    FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), destPath, sizeof(destPath));
+    snprintf(backupPath, sizeof(backupPath), "%s.bak", destPath);
+
+    const bool hadExisting = Storage.exists(destPath);
+    if (Storage.exists(backupPath)) Storage.remove(backupPath);
+    if (hadExisting && !Storage.rename(destPath, backupPath)) {
+      cleanupTempFamilyDir(tempDir);
+      RenderLock lock(*this);
+      state_ = ERROR;
+      errorMessage_ = "Failed to update font: " + file.name;
+      return;
+    }
+    if (!Storage.rename(tempPath, destPath)) {
+      if (hadExisting) Storage.rename(backupPath, destPath);
+      cleanupTempFamilyDir(tempDir);
+      RenderLock lock(*this);
+      state_ = ERROR;
+      errorMessage_ = "Failed to install font: " + file.name;
+      return;
+    }
+    if (hadExisting) Storage.remove(backupPath);
+  }
+
+  cleanupTempFamilyDir(tempDir);
   fontInstaller_.refreshRegistry();
   family.installed = true;
   family.hasUpdate = false;
