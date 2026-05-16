@@ -110,7 +110,7 @@ void reloadThemeState() {
             disableTextAntialiasing || !readPackageSettingBool(package.id, "textAntialiasing", false);
       }
       if (descriptor.packageReaderRefreshSetting) {
-        const std::string refresh = readPackageSettingString(package.id, "readerRefresh", "5-pages");
+        const std::string refresh = readPackageSettingString(package.id, "readerRefresh", "every-page");
         const int interval = readerRefreshIntervalFromSetting(refresh);
         if (interval > 0 && (readerCleanupInterval == 0 || interval < readerCleanupInterval)) {
           readerCleanupInterval = interval;

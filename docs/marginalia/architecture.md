@@ -190,7 +190,8 @@ settings while still keeping the normal reader setting intact.
 
 `readerRefresh: "package-setting"` reads the package enum setting named `readerRefresh`. This is intended for inverted
 reader themes, where normal partial page turns can leave bright previous-page glyphs on a dark background. The supported
-values are `off`, `every-page`, `5-pages`, and `10-pages`. Firmware uses a fast dark cleanup frame at that cadence
+values are `off`, `every-page`, `5-pages`, and `10-pages`. Firmware defaults this to `every-page` when a package
+declares reader cleanup but no saved package setting exists. Firmware uses a fast dark cleanup frame at that cadence
 instead of forcing a harsh full refresh on every page.
 
 Theme host state is refreshed during firmware startup and package lifecycle changes. Rendering code reads only cached
