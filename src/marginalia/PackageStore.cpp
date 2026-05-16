@@ -475,6 +475,18 @@ PackageInstallResult installInboxPackage(const std::string& inboxName) {
   return result;
 }
 
+bool removeInboxPackage(const std::string& inboxName) {
+  if (!isSafePackageId(inboxName) || !ensurePackageBaseDirectories()) {
+    return false;
+  }
+
+  const std::string inboxPath = std::string(PACKAGE_INBOX_ROOT) + "/" + inboxName;
+  if (!Storage.exists(inboxPath.c_str())) {
+    return true;
+  }
+  return Storage.removeDir(inboxPath.c_str());
+}
+
 bool uninstallPackage(const std::string& packageId) {
   if (!isSafePackageId(packageId) || !ensurePackageBaseDirectories()) {
     return false;

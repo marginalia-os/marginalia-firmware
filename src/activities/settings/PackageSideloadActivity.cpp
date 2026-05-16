@@ -189,6 +189,9 @@ void PackageSideloadActivity::installSelected() {
 
   const auto install = Marginalia::installInboxPackage(extract.packageId);
   if (!install.ok) {
+    if (!Marginalia::removeInboxPackage(extract.packageId)) {
+      LOG_ERR("MPKG", "Failed to remove sideloaded inbox package after install error: %s", extract.packageId.c_str());
+    }
     setError(install.error);
     return;
   }

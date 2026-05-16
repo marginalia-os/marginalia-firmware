@@ -79,6 +79,7 @@ std::string readPackageSettingString(const std::string& packageId, const std::st
 bool writePackageSettingBool(const std::string& packageId, const std::string& settingId, bool value);
 bool writePackageSettingString(const std::string& packageId, const std::string& settingId, const std::string& value);
 PackageInstallResult installInboxPackage(const std::string& inboxName);
+bool removeInboxPackage(const std::string& inboxName);
 bool uninstallPackage(const std::string& packageId);
 
 }  // namespace Marginalia
