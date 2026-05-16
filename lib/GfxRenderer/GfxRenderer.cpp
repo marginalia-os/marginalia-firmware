@@ -980,10 +980,16 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
   const bool invertDisplay = Marginalia::packageThemeInvertsDisplay();
+  HalDisplay::RefreshMode effectiveRefreshMode = refreshMode;
+  if (Marginalia::packageThemeRequestsHalfRefresh() && effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+    effectiveRefreshMode = HalDisplay::HALF_REFRESH;
+    LOG_DBG("GFX", "Package theme requested half refresh");
+  }
+
   if (invertDisplay) {
     invertScreen();
   }
-  display.displayBuffer(refreshMode, fadingFix);
+  display.displayBuffer(effectiveRefreshMode, fadingFix);
   if (invertDisplay) {
     invertScreen();
   }
