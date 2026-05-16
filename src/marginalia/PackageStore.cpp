@@ -357,7 +357,7 @@ bool isSafePackageRelativePath(const std::string& value) {
 bool ensurePackageBaseDirectories() {
   return Storage.ensureDirectoryExists("/.marginalia") && Storage.ensureDirectoryExists(PACKAGE_ROOT) &&
          Storage.ensureDirectoryExists(PACKAGE_INBOX_ROOT) && Storage.ensureDirectoryExists(PACKAGE_STAGING_ROOT) &&
-         Storage.ensureDirectoryExists(PACKAGE_STATE_ROOT);
+         Storage.ensureDirectoryExists(PACKAGE_STATE_ROOT) && Storage.ensureDirectoryExists(PACKAGE_SIDELOAD_ROOT);
 }
 
 bool readPackageEnabled(const std::string& packageId) {

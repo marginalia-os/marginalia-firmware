@@ -9,6 +9,7 @@ constexpr const char* PACKAGE_ROOT = "/.marginalia/packages";
 constexpr const char* PACKAGE_INBOX_ROOT = "/.marginalia/inbox";
 constexpr const char* PACKAGE_STAGING_ROOT = "/.marginalia/staging";
 constexpr const char* PACKAGE_STATE_ROOT = "/.marginalia/package-state";
+constexpr const char* PACKAGE_SIDELOAD_ROOT = "/.marginalia/sideload";
 constexpr size_t MAX_MANIFEST_BYTES = 16384;
 constexpr int PACKAGE_API_LEVEL = 1;
 

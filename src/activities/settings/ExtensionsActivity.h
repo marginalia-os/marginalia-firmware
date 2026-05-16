@@ -23,6 +23,7 @@ class ExtensionsActivity final : public Activity {
     StrId subtitle;
     std::string kindFilter;
     bool opensHub = false;
+    bool opensSideload = false;
   };
 
   std::vector<ExtensionSection> sections_;
