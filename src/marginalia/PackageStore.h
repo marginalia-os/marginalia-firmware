@@ -45,6 +45,13 @@ struct PackageManifest {
   std::string error;
 };
 
+struct PackageInstallResult {
+  bool ok = false;
+  std::string packageId;
+  std::string packageName;
+  std::string error;
+};
+
 class PackageStore {
  public:
   void scan();
@@ -70,6 +77,7 @@ std::string readPackageSettingString(const std::string& packageId, const std::st
                                      const std::string& defaultValue);
 bool writePackageSettingBool(const std::string& packageId, const std::string& settingId, bool value);
 bool writePackageSettingString(const std::string& packageId, const std::string& settingId, const std::string& value);
+PackageInstallResult installInboxPackage(const std::string& inboxName);
 bool uninstallPackage(const std::string& packageId);
 
 }  // namespace Marginalia

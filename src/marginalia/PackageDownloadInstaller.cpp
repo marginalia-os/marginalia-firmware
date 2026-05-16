@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 #include "PackageArchiveInstaller.h"
 #include "PackageStore.h"
@@ -97,7 +98,8 @@ bool sha256File(const std::string& path, std::string& outHex) {
 }  // namespace
 
 PackageDownloadInstallResult downloadPackageArchiveToInbox(const std::string& url, const std::string& expectedSha256,
-                                                           const size_t expectedSize) {
+                                                           const size_t expectedSize,
+                                                           PackageDownloadProgressCallback progress) {
   const std::string normalizedSha256 = lowercase(expectedSha256);
   if (!looksLikePackageUrl(url)) {
     return resultError("invalid package URL");
@@ -115,7 +117,7 @@ PackageDownloadInstallResult downloadPackageArchiveToInbox(const std::string& ur
   const std::string downloadPath = std::string(PACKAGE_STAGING_ROOT) + "/download.mpkg.zip";
   if (Storage.exists(downloadPath.c_str())) Storage.remove(downloadPath.c_str());
 
-  const auto downloadResult = HttpDownloader::downloadToFile(url, downloadPath);
+  const auto downloadResult = HttpDownloader::downloadToFile(url, downloadPath, std::move(progress));
   if (downloadResult != HttpDownloader::OK) {
     Storage.remove(downloadPath.c_str());
     return resultError("package download failed");

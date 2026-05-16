@@ -55,7 +55,29 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   return {prev, next, tiltPrev || tiltNext};
 }
 
-inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+inline void displayWithRefreshCycle(GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+  const int darkCleanupInterval = Marginalia::packageThemeReaderCleanupInterval();
+  if (darkCleanupInterval > 0) {
+    if (pagesUntilFullRefresh > darkCleanupInterval) {
+      pagesUntilFullRefresh = darkCleanupInterval;
+    }
+    if (pagesUntilFullRefresh <= 1) {
+      if (renderer.storeBwBuffer()) {
+        renderer.clearScreen();
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+        renderer.restoreBwBuffer();
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      } else {
+        renderer.displayBuffer();
+      }
+      pagesUntilFullRefresh = darkCleanupInterval;
+    } else {
+      renderer.displayBuffer();
+      pagesUntilFullRefresh--;
+    }
+    return;
+  }
+
   if (pagesUntilFullRefresh <= 1) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();

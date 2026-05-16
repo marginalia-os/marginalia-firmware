@@ -2221,68 +2221,24 @@ void CrossPointWebServer::handlePackageInstall() {
     return;
   }
 
-  const std::string inboxName = request["package"].as<const char*>();
-  if (!Marginalia::isSafePackageId(inboxName)) {
-    server->send(400, "application/json", "{\"error\":\"Invalid package id\"}");
+  const auto result = Marginalia::installInboxPackage(request["package"].as<const char*>());
+  if (!result.ok) {
+    JsonDocument doc;
+    doc["error"] = result.error;
+    String json;
+    serializeJson(doc, json);
+    server->send(400, "application/json", json);
     return;
-  }
-
-  const std::string inboxPath = std::string(Marginalia::PACKAGE_INBOX_ROOT) + "/" + inboxName;
-  Marginalia::PackageStore store;
-  auto manifest = store.readManifest(inboxPath, inboxName);
-  if (!manifest.valid || !Marginalia::isSafePackageId(manifest.id)) {
-    server->send(400, "application/json", "{\"error\":\"Invalid manifest\"}");
-    return;
-  }
-  if (!manifest.compatible) {
-    String body = "{\"error\":\"Incompatible package: ";
-    body += manifest.compatibilityError.c_str();
-    body += "\"}";
-    server->send(400, "application/json", body);
-    return;
-  }
-
-  const std::string activePath = std::string(Marginalia::PACKAGE_ROOT) + "/" + manifest.id;
-  const std::string newPath = std::string(Marginalia::PACKAGE_STAGING_ROOT) + "/" + manifest.id + ".new";
-  const std::string oldPath = std::string(Marginalia::PACKAGE_STAGING_ROOT) + "/" + manifest.id + ".old";
-
-  if (Storage.exists(newPath.c_str())) Storage.removeDir(newPath.c_str());
-  if (Storage.exists(oldPath.c_str())) Storage.removeDir(oldPath.c_str());
-
-  if (!Storage.rename(inboxPath.c_str(), newPath.c_str())) {
-    server->send(500, "application/json", "{\"error\":\"Could not stage package\"}");
-    return;
-  }
-
-  bool hadActive = Storage.exists(activePath.c_str());
-  if (hadActive && !Storage.rename(activePath.c_str(), oldPath.c_str())) {
-    Storage.rename(newPath.c_str(), inboxPath.c_str());
-    server->send(500, "application/json", "{\"error\":\"Could not back up installed package\"}");
-    return;
-  }
-
-  if (!Storage.rename(newPath.c_str(), activePath.c_str())) {
-    if (hadActive) {
-      Storage.rename(oldPath.c_str(), activePath.c_str());
-    }
-    Storage.rename(newPath.c_str(), inboxPath.c_str());
-    server->send(500, "application/json", "{\"error\":\"Could not activate package\"}");
-    return;
-  }
-
-  if (hadActive) {
-    Storage.removeDir(oldPath.c_str());
   }
 
   JsonDocument response;
   response["ok"] = true;
-  response["id"] = manifest.id;
-  response["name"] = manifest.name;
+  response["id"] = result.packageId;
+  response["name"] = result.packageName;
   String json;
   serializeJson(response, json);
-  Marginalia::refreshPackageThemeHost();
   server->send(200, "application/json", json);
-  LOG_DBG("WEB", "Installed package: %s", manifest.id.c_str());
+  LOG_DBG("WEB", "Installed package: %s", result.packageId.c_str());
 }
 
 void CrossPointWebServer::handlePackageEnable() {

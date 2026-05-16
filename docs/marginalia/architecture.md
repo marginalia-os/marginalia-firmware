@@ -73,6 +73,11 @@ format names such as packages or archive files. Normal device settings stay in S
 belongs on the extension detail/configuration screens, with optional bridge rows from normal settings when that improves
 discovery.
 
+The device should also be able to browse the Hub directly. The web server remains a side-loading and diagnostics bridge;
+it should not be the only package browser. The on-device Hub follows the same shape as OPDS browsing: connect Wi-Fi,
+load a catalog, filter for compatible entries, download an archive, verify it, and install through the same package
+transaction used by other install surfaces.
+
 This follows RT-Thread's broad shape:
 
 - firmware/BSP/core capabilities are compiled into the device
@@ -172,7 +177,8 @@ Theme packages can include `src/theme.json` to request firmware-hosted OS render
   "scope": "os",
   "mode": "invert-screen",
   "refreshMode": "half",
-  "textAntialiasing": "package-setting"
+  "textAntialiasing": "package-setting",
+  "readerRefresh": "package-setting"
 }
 ```
 
@@ -181,6 +187,11 @@ normal fast display updates to half refresh while the theme is active. `textAnti
 grayscale antialiasing without overwriting the user's saved setting. `textAntialiasing: "package-setting"` reads the
 package boolean setting named `textAntialiasing`; this lets the theme expose an antialiasing toggle in its package
 settings while still keeping the normal reader setting intact.
+
+`readerRefresh: "package-setting"` reads the package enum setting named `readerRefresh`. This is intended for inverted
+reader themes, where normal partial page turns can leave bright previous-page glyphs on a dark background. The supported
+values are `off`, `every-page`, `5-pages`, and `10-pages`. Firmware uses a fast dark cleanup frame at that cadence
+instead of forcing a harsh full refresh on every page.
 
 Theme host state is refreshed during firmware startup and package lifecycle changes. Rendering code reads only cached
 theme flags; it must not scan package directories or parse package JSON from `displayBuffer()`.
@@ -254,6 +265,10 @@ Firmware should:
 5. install into local storage
 6. register the package only after verification succeeds
 7. disable a broken package instead of blocking boot
+
+All install surfaces must share the same activation transaction: validate the inbox manifest, stage the new package,
+backup any installed copy, move the staged package into `packages/`, clean up the backup, and refresh affected hosts.
+This keeps web upload/download, SD side-loading, and on-device Hub installs behaviorally identical.
 
 The hub should:
 

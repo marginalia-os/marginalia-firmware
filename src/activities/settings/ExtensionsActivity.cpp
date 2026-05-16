@@ -4,6 +4,7 @@
 #include <I18n.h>
 
 #include "MappedInputManager.h"
+#include "PackageHubActivity.h"
 #include "PackageListActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -11,6 +12,7 @@
 void ExtensionsActivity::onEnter() {
   Activity::onEnter();
   sections_ = {
+      {StrId::STR_EXTENSION_HUB, StrId::STR_EXTENSION_HUB_DESC, "", true},
       {StrId::STR_INSTALLED, StrId::STR_EXTENSIONS_INSTALLED_DESC, ""},
       {StrId::STR_EXTENSION_THEMES, StrId::STR_EXTENSION_THEMES_DESC, "theme"},
       {StrId::STR_EXTENSION_READER, StrId::STR_EXTENSION_READER_DESC, "reader_module"},
@@ -69,6 +71,10 @@ void ExtensionsActivity::openSelectedSection() {
 
   const auto& section = sections_[selectedIndex_];
   auto resultHandler = [this](const ActivityResult&) { requestUpdate(); };
+  if (section.opensHub) {
+    startActivityForResult(std::make_unique<PackageHubActivity>(renderer, mappedInput), resultHandler);
+    return;
+  }
   startActivityForResult(
       std::make_unique<PackageListActivity>(renderer, mappedInput, section.title, section.kindFilter), resultHandler);
 }
