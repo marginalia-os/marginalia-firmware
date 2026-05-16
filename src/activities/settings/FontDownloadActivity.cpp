@@ -8,8 +8,11 @@
 #include <WiFi.h>
 #include <esp_rom_crc.h>
 
+#include <cstdio>
+
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
+#include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
@@ -18,6 +21,39 @@
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
+
+namespace {
+
+bool ensureTempFamilyDir(const std::string& familyName, char* tempDir, const size_t tempDirSize) {
+  const char* root = SdCardFontRegistry::defaultWriteRoot();
+  if (!Storage.exists(root) && !Storage.mkdir(root)) {
+    LOG_ERR("FONT", "Failed to create fonts root: %s", root);
+    return false;
+  }
+
+  snprintf(tempDir, tempDirSize, "%s/_download_%s", root, familyName.c_str());
+  if (Storage.exists(tempDir) && !Storage.removeDir(tempDir)) {
+    LOG_ERR("FONT", "Failed to clear temp font dir: %s", tempDir);
+    return false;
+  }
+  if (!Storage.mkdir(tempDir)) {
+    LOG_ERR("FONT", "Failed to create temp font dir: %s", tempDir);
+    return false;
+  }
+  return true;
+}
+
+void cleanupTempFamilyDir(const char* tempDir) {
+  if (tempDir && tempDir[0] != '\0' && Storage.exists(tempDir)) {
+    Storage.removeDir(tempDir);
+  }
+}
+
+void buildTempFontPath(const char* tempDir, const std::string& filename, char* outBuf, const size_t outBufSize) {
+  snprintf(outBuf, outBufSize, "%s/%s", tempDir, filename.c_str());
+}
+
+}  // namespace
 
 // --- Lifecycle ---
 
@@ -30,10 +66,12 @@ void FontDownloadActivity::onEnter() {
 
 void FontDownloadActivity::onExit() {
   Activity::onExit();
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
+
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    WiFi.disconnect(false);
+    delay(30);
+    silentRestart();
+  }
 }
 
 void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
@@ -172,10 +210,11 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 // --- Download ---
 
 void FontDownloadActivity::downloadAll() {
+  cancelRequested_ = false;
   for (size_t i = 0; i < families_.size(); i++) {
     if (families_[i].installed) continue;
     downloadFamily(families_[i]);
-    if (state_ == ERROR) return;
+    if (state_ == ERROR || cancelRequested_) return;
   }
 
   {
@@ -185,10 +224,11 @@ void FontDownloadActivity::downloadAll() {
 }
 
 void FontDownloadActivity::updateAll() {
+  cancelRequested_ = false;
   for (size_t i = 0; i < families_.size(); i++) {
     if (!families_[i].hasUpdate) continue;
     downloadFamily(families_[i]);
-    if (state_ == ERROR) return;
+    if (state_ == ERROR || cancelRequested_) return;
   }
 
   {
@@ -264,17 +304,17 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     RenderLock lock(*this);
     state_ = DOWNLOADING;
     downloadingFamilyIndex_ = static_cast<int>(&family - families_.data());
-    currentFileIndex_ = 0;
-    currentFileTotal_ = family.files.size();
     fileProgress_ = 0;
     fileTotal_ = 0;
+    cancelRequested_ = false;
   }
   requestUpdateAndWait();
 
-  if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
+  char tempDir[160];
+  if (!ensureTempFamilyDir(family.name, tempDir, sizeof(tempDir))) {
     RenderLock lock(*this);
     state_ = ERROR;
-    errorMessage_ = "Failed to create font directory";
+    errorMessage_ = "Failed to create font temp directory";
     return;
   }
 
@@ -283,28 +323,42 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     {
       RenderLock lock(*this);
-      currentFileIndex_ = i;
       fileProgress_ = 0;
       fileTotal_ = file.size;
     }
     requestUpdateAndWait();
 
-    char destPath[128];
-    FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), destPath, sizeof(destPath));
+    char tempPath[192];
+    buildTempFontPath(tempDir, file.name, tempPath, sizeof(tempPath));
 
     std::string url = baseUrl_ + file.name;
 
-    auto result = HttpDownloader::downloadToFile(url, destPath, [this](size_t downloaded, size_t total) {
-      fileProgress_ = downloaded;
-      fileTotal_ = total;
-      requestUpdate(true);
-    });
+    auto result = HttpDownloader::downloadToFile(
+        url, tempPath,
+        [this](size_t downloaded, size_t total) {
+          fileProgress_ = downloaded;
+          fileTotal_ = total;
+          mappedInput.update();
+          if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+              mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+            cancelRequested_ = true;
+          }
+          requestUpdate(true);
+        },
+        &cancelRequested_);
+
+    if (result == HttpDownloader::ABORTED) {
+      cleanupTempFamilyDir(tempDir);
+      {
+        RenderLock lock(*this);
+        state_ = FAMILY_LIST;
+      }
+      return;
+    }
 
     if (result != HttpDownloader::OK) {
       LOG_ERR("FONT", "Download failed: %s (%d)", file.name.c_str(), result);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Download failed: " + file.name;
@@ -312,11 +366,9 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
 
     uint32_t actualCrc = 0;
-    if (!computeFileCrc32(destPath, actualCrc)) {
-      LOG_ERR("FONT", "Failed to open file for CRC check: %s", destPath);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+    if (!computeFileCrc32(tempPath, actualCrc)) {
+      LOG_ERR("FONT", "Failed to open file for CRC check: %s", tempPath);
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Failed to compute checksum: " + file.name;
@@ -324,9 +376,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     if (actualCrc != file.crc32) {
       LOG_ERR("FONT", "CRC32 mismatch for %s: got %08x expected %08x", file.name.c_str(), actualCrc, file.crc32);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Checksum mismatch: " + file.name;
@@ -334,18 +384,54 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     LOG_DBG("FONT", "Downloaded %s (size=%zu crc32=%08x)", file.name.c_str(), file.size, actualCrc);
 
-    if (!fontInstaller_.validateCpfontFile(destPath)) {
-      LOG_ERR("FONT", "Invalid .cpfont: %s", destPath);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+    if (!fontInstaller_.validateCpfontFile(tempPath)) {
+      LOG_ERR("FONT", "Invalid .cpfont: %s", tempPath);
+      cleanupTempFamilyDir(tempDir);
       RenderLock lock(*this);
       state_ = ERROR;
       errorMessage_ = "Invalid font file: " + file.name;
       return;
     }
+    currentFileIndex_++;
   }
 
+  if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
+    cleanupTempFamilyDir(tempDir);
+    RenderLock lock(*this);
+    state_ = ERROR;
+    errorMessage_ = "Failed to create font directory";
+    return;
+  }
+
+  for (const auto& file : family.files) {
+    char tempPath[192];
+    char destPath[192];
+    char backupPath[208];
+    buildTempFontPath(tempDir, file.name, tempPath, sizeof(tempPath));
+    FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), destPath, sizeof(destPath));
+    snprintf(backupPath, sizeof(backupPath), "%s.bak", destPath);
+
+    const bool hadExisting = Storage.exists(destPath);
+    if (Storage.exists(backupPath)) Storage.remove(backupPath);
+    if (hadExisting && !Storage.rename(destPath, backupPath)) {
+      cleanupTempFamilyDir(tempDir);
+      RenderLock lock(*this);
+      state_ = ERROR;
+      errorMessage_ = "Failed to update font: " + file.name;
+      return;
+    }
+    if (!Storage.rename(tempPath, destPath)) {
+      if (hadExisting) Storage.rename(backupPath, destPath);
+      cleanupTempFamilyDir(tempDir);
+      RenderLock lock(*this);
+      state_ = ERROR;
+      errorMessage_ = "Failed to install font: " + file.name;
+      return;
+    }
+    if (hadExisting) Storage.remove(backupPath);
+  }
+
+  cleanupTempFamilyDir(tempDir);
   fontInstaller_.refreshRegistry();
   family.installed = true;
   family.hasUpdate = false;
@@ -432,12 +518,25 @@ void FontDownloadActivity::loop() {
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       if (!families_.empty()) {
         if (isDownloadAllRow(selectedIndex_)) {
+          currentFileIndex_ = 0;
+          currentFileTotal_ = 0;
+          for (const auto& f : families_) {
+            if (!f.installed) currentFileTotal_ += f.files.size();
+          }
+
           downloadAll();
         } else if (isUpdateAllRow(selectedIndex_)) {
+          currentFileIndex_ = 0;
+          currentFileTotal_ = 0;
+          for (const auto& f : families_) {
+            if (f.hasUpdate) currentFileTotal_ += f.files.size();
+          }
           updateAll();
         } else {
           auto& family = families_[familyIndexFromList(selectedIndex_)];
           if (!family.installed || family.hasUpdate) {
+            currentFileIndex_ = 0;
+            currentFileTotal_ = family.files.size();
             downloadFamily(family);
           } else {
             promptDeleteSelectedFamily();
@@ -571,6 +670,9 @@ void FontDownloadActivity::render(RenderLock&&) {
         renderer,
         Rect{metrics.contentSidePadding, barY, pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
         static_cast<int>(progress * 100), 100);
+
+    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state_ == COMPLETE) {
     renderer.drawCenteredText(UI_10_FONT_ID, centerY, tr(STR_FONT_INSTALLED), true, EpdFontFamily::BOLD);
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
