@@ -37,15 +37,21 @@ Add this control command after a successful `hello`:
 {"op":"start_get","kind":"crash_report"}
 ```
 
-Firmware validates the session, opens `/crash_report.txt`, publishes a `sending` status with total size, then streams
-numbered frames through `data-out`:
+Firmware validates the session, opens `/crash_report.txt`, publishes a `sending` status with total size, then sends one
+numbered frame through `data-out`:
 
 ```text
 uint32_le sequence
 bytes payload
 ```
 
-When the file is fully sent, firmware publishes:
+The host acknowledges each received frame before firmware sends the next one:
+
+```json
+{"op":"get_ack","sequence":0}
+```
+
+When the file is fully sent and the final frame has been acknowledged, firmware publishes:
 
 ```json
 {"state":"sent","kind":"crash_report","name":"crash_report.txt","sent":1234,"size":1234}
@@ -61,14 +67,17 @@ Crash reports are small enough that the first implementation can use a conservat
 1. Host subscribes to `status` and `data-out`.
 2. Host sends authenticated `hello` using trusted-host auth when available, or the visible code fallback.
 3. Host sends `start_get`.
-4. Firmware reads the crash report in bounded chunks and notifies `data-out`.
-5. Host checks chunk sequence, writes bytes to a local `.part` file, and atomically renames it when `sent` arrives.
+4. Firmware reads one bounded chunk and notifies `data-out`.
+5. Host validates the sequence and sends `get_ack`.
+6. Firmware sends the next chunk after the ack, repeating until EOF.
+7. Host checks chunk sequence, writes bytes to a local `.part` file, and atomically renames it when `sent` arrives.
 
 Use a default payload of 160 bytes to match upload compatibility. The CLI can expose `--chunk-size` for debugging, but
 firmware should clamp to a safe maximum.
 
 The first PR does not implement resume. If sequence validation fails on the host, the host should cancel and delete its
-local `.part` file.
+local `.part` file. Stop-and-go ACK is intentionally slower than unacknowledged notifications but avoids dropped BLE
+notifications corrupting diagnostics.
 
 ## Security
 
@@ -128,4 +137,3 @@ Hardware:
 - verify the downloaded file matches the SD-card crash report content
 - verify missing `/crash_report.txt` returns `not_found`
 - verify bad/no auth cannot download
-
