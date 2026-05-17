@@ -14,6 +14,7 @@ from typing import Any
 
 try:
     from bleak import BleakClient, BleakScanner
+    from bleak.exc import BleakError
 except ImportError as exc:  # pragma: no cover - exercised by users without deps installed.
     raise SystemExit("Missing dependency: install bleak with `python3 -m pip install bleak`.") from exc
 
@@ -36,7 +37,7 @@ def sha256_file(path: Path) -> str:
 def decode_status(data: bytearray | bytes) -> dict[str, Any]:
     try:
         return json.loads(bytes(data).decode("utf-8"))
-    except Exception:
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return {"state": "unknown", "raw": bytes(data).decode("utf-8", errors="replace")}
 
 
@@ -98,55 +99,67 @@ async def put_package(args: argparse.Namespace) -> int:
                 pass
         return final_status
 
-    device = await find_device(args.scan_timeout)
+    try:
+        device = await find_device(args.scan_timeout)
+    except (BleakError, OSError) as exc:
+        print(f"BLE scan failed: {exc}", file=sys.stderr)
+        return 1
     if device is None:
         print("No Marginalia BLE transfer device found.", file=sys.stderr)
         return 1
 
     print(f"Connecting to {device.name or device.address}...")
-    async with BleakClient(device) as client:
-        await client.start_notify(STATUS_UUID, on_status)
-        await write_json(client, {"op": "hello", "version": 1, "code": args.code})
-        hello_status = await wait_for_status({"connected", "error"}, args.control_timeout)
-        if hello_status.get("state") == "error":
-            print(f"\nDevice rejected session: {final_status.get('error')}", file=sys.stderr)
-            return 1
-        if hello_status.get("state") != "connected":
-            print("\nTimed out waiting for device session confirmation.", file=sys.stderr)
-            return 1
+    try:
+        async with BleakClient(device) as client:
+            await client.start_notify(STATUS_UUID, on_status)
+            try:
+                await write_json(client, {"op": "hello", "version": 1, "code": args.code})
+                hello_status = await wait_for_status({"connected", "error"}, args.control_timeout)
+                if hello_status.get("state") == "error":
+                    print(f"\nDevice rejected session: {final_status.get('error')}", file=sys.stderr)
+                    return 1
+                if hello_status.get("state") != "connected":
+                    print("\nTimed out waiting for device session confirmation.", file=sys.stderr)
+                    return 1
 
-        await write_json(
-            client,
-            {"op": "start_put", "kind": "package", "name": archive.name, "size": size, "sha256": digest},
-        )
-        start_status = await wait_for_status({"receiving", "error"}, args.control_timeout)
-        if start_status.get("state") == "error":
-            print(f"\nDevice rejected transfer: {final_status.get('error')}", file=sys.stderr)
-            return 1
-        if start_status.get("state") != "receiving":
-            print("\nTimed out waiting for device transfer start.", file=sys.stderr)
-            return 1
+                await write_json(
+                    client,
+                    {"op": "start_put", "kind": "package", "name": archive.name, "size": size, "sha256": digest},
+                )
+                start_status = await wait_for_status({"receiving", "error"}, args.control_timeout)
+                if start_status.get("state") == "error":
+                    print(f"\nDevice rejected transfer: {final_status.get('error')}", file=sys.stderr)
+                    return 1
+                if start_status.get("state") != "receiving":
+                    print("\nTimed out waiting for device transfer start.", file=sys.stderr)
+                    return 1
 
-        sequence = 0
-        with archive.open("rb") as handle:
-            while True:
-                payload = handle.read(args.chunk_size)
-                if not payload:
-                    break
-                frame = struct.pack("<I", sequence) + payload
-                await client.write_gatt_char(DATA_IN_UUID, frame, response=False)
-                sequence += 1
-                if args.chunk_delay > 0:
-                    await asyncio.sleep(args.chunk_delay)
+                sequence = 0
+                with archive.open("rb") as handle:
+                    while True:
+                        payload = handle.read(args.chunk_size)
+                        if not payload:
+                            break
+                        frame = struct.pack("<I", sequence) + payload
+                        await client.write_gatt_char(DATA_IN_UUID, frame, response=False)
+                        sequence += 1
+                        if args.chunk_delay > 0:
+                            await asyncio.sleep(args.chunk_delay)
 
-        await write_json(client, {"op": "commit"})
-        try:
-            await asyncio.wait_for(done.wait(), timeout=args.install_timeout)
-        except asyncio.TimeoutError:
-            print("\nTimed out waiting for install result.", file=sys.stderr)
-            return 1
-        finally:
-            await client.stop_notify(STATUS_UUID)
+                await write_json(client, {"op": "commit"})
+                try:
+                    await asyncio.wait_for(done.wait(), timeout=args.install_timeout)
+                except asyncio.TimeoutError:
+                    print("\nTimed out waiting for install result.", file=sys.stderr)
+                    return 1
+            finally:
+                try:
+                    await client.stop_notify(STATUS_UUID)
+                except (BleakError, OSError) as exc:
+                    print(f"\nWarning: failed to stop BLE notifications: {exc}", file=sys.stderr)
+    except (BleakError, OSError) as exc:
+        print(f"\nBLE transfer failed: {exc}", file=sys.stderr)
+        return 1
 
     print()
     if final_status.get("state") == "installed":
@@ -156,14 +169,30 @@ async def put_package(args: argparse.Namespace) -> int:
     return 1
 
 
+def six_digit_code(value: str) -> str:
+    if len(value) != 6 or not value.isdigit():
+        raise argparse.ArgumentTypeError("must be exactly 6 digits")
+    return value
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     put = sub.add_parser("put-package", help="Upload and install a .mpkg.zip archive")
     put.add_argument("archive", help="Path to the .mpkg.zip archive")
-    put.add_argument("--code", required=True, help="Six-digit code shown on the device")
-    put.add_argument("--chunk-size", type=int, default=160, help="Payload bytes per BLE data frame")
+    put.add_argument("--code", required=True, type=six_digit_code, help="Six-digit code shown on the device")
+    put.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
     put.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
     put.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
