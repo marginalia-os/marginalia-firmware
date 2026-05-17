@@ -720,7 +720,10 @@ void BleTransferActivity::handleForgetHostPrompt() {
   } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (promptSelection_ == 1) {
       RenderLock lock(*this);
-      BLE_TRUSTED_HOSTS.clearAll();
+      if (!BLE_TRUSTED_HOSTS.clearAll()) {
+        setError("could not forget trusted host");
+        return;
+      }
     }
     setState(State::ADVERTISING);
   } else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {

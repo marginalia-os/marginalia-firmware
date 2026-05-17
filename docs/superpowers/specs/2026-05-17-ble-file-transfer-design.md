@@ -100,7 +100,11 @@ book uploads go to `/Books`:
 - maximum filename length is 96 bytes
 - maximum upload size should be bounded conservatively for available SD-card and RAM behavior
 
-The temporary path is `/.marginalia/sideload/.ble-<safe-name>.part`. On successful verification, rename to `/.marginalia/sideload/<safe-name>`.
+Package uploads use `/.marginalia/sideload/.ble-<safe-name>.part` while receiving. On successful verification, rename
+to `/.marginalia/sideload/<safe-name>` and install from the package inbox path.
+
+Book uploads use `/Books/.ble-<safe-name>.part` while receiving. On successful verification, rename to
+`/Books/<safe-name>`.
 
 If install succeeds, the archive may remain available for manual reinstall. If install fails, keep the verified archive in sideload and show the install error.
 

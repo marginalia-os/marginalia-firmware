@@ -38,7 +38,7 @@ class BleTrustedHostStore {
   bool removeHost(const std::string& hostId);
   const BleTrustedHost* findHost(const std::string& hostId) const;
   bool hasHosts() const { return !hosts.empty(); }
-  void clearAll();
+  bool clearAll();
 
   const std::vector<BleTrustedHost>& getHosts() const { return hosts; }
 

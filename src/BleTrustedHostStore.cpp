@@ -35,10 +35,15 @@ bool BleTrustedHostStore::loadFromFile() {
 bool BleTrustedHostStore::addOrReplaceHost(const BleTrustedHost& host) {
   if (host.hostId.empty() || host.secret.empty()) return false;
 
+  const auto oldHosts = hosts;
   hosts.clear();
   hosts.push_back(host);
+  if (!saveToFile()) {
+    hosts = oldHosts;
+    return false;
+  }
   LOG_DBG("BTH", "Saved BLE trusted host: %s", host.hostId.c_str());
-  return saveToFile();
+  return true;
 }
 
 bool BleTrustedHostStore::removeHost(const std::string& hostId) {
@@ -46,9 +51,14 @@ bool BleTrustedHostStore::removeHost(const std::string& hostId) {
       find_if(hosts.begin(), hosts.end(), [&hostId](const BleTrustedHost& item) { return item.hostId == hostId; });
   if (host == hosts.end()) return false;
 
+  const auto oldHosts = hosts;
   hosts.erase(host);
+  if (!saveToFile()) {
+    hosts = oldHosts;
+    return false;
+  }
   LOG_DBG("BTH", "Removed BLE trusted host: %s", hostId.c_str());
-  return saveToFile();
+  return true;
 }
 
 const BleTrustedHost* BleTrustedHostStore::findHost(const std::string& hostId) const {
@@ -57,8 +67,13 @@ const BleTrustedHost* BleTrustedHostStore::findHost(const std::string& hostId) c
   return host == hosts.end() ? nullptr : &*host;
 }
 
-void BleTrustedHostStore::clearAll() {
+bool BleTrustedHostStore::clearAll() {
+  const auto oldHosts = hosts;
   hosts.clear();
-  saveToFile();
+  if (!saveToFile()) {
+    hosts = oldHosts;
+    return false;
+  }
   LOG_DBG("BTH", "Cleared BLE trusted hosts");
+  return true;
 }

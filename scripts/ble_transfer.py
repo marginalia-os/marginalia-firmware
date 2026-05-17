@@ -67,10 +67,13 @@ def load_ble_config() -> dict[str, Any]:
 def save_ble_config(config: dict[str, Any]) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2, sort_keys=True)
         handle.write("\n")
+        os.fchmod(handle.fileno(), 0o600)
     tmp.replace(CONFIG_PATH)
+    CONFIG_PATH.chmod(0o600)
 
 
 def get_host_identity(config: dict[str, Any]) -> tuple[str, str]:
@@ -80,14 +83,35 @@ def get_host_identity(config: dict[str, Any]) -> tuple[str, str]:
         config["host_id"] = host_id
     host_name = config.get("host_name")
     if not isinstance(host_name, str) or not host_name:
-        host_name = platform.node() or "Marginalia host"
-        config["host_name"] = host_name[:48]
+        host_name = (platform.node() or "Marginalia host")[:48]
+        config["host_name"] = host_name
     return host_id, host_name
 
 
 def trusted_response(secret: str, device_nonce: str, host_id: str) -> str:
     message = f"{device_nonce}|{host_id}|1".encode("utf-8")
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def remember_trusted_host(
+    config: dict[str, Any],
+    device_id: str,
+    host_id: str,
+    host_name: str,
+    secret: str,
+    *,
+    transfer_label: str,
+) -> None:
+    config["devices"][device_id] = {"host_id": host_id, "host_name": host_name, "secret": secret}
+    try:
+        save_ble_config(config)
+    except OSError as exc:
+        print(
+            f"Warning: {transfer_label} succeeded, but failed to save trusted host for {device_id}: {exc}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Saved trusted host for {device_id}")
 
 
 async def find_device(timeout: float):
@@ -323,16 +347,26 @@ async def put_file(
     print()
     if final_status.get("state") == "installed":
         if final_status.get("paired") and pending_pair_device and pending_pair_secret:
-            config["devices"][pending_pair_device] = {"host_id": host_id, "host_name": host_name, "secret": pending_pair_secret}
-            save_ble_config(config)
-            print(f"Saved trusted host for {pending_pair_device}")
+            remember_trusted_host(
+                config,
+                pending_pair_device,
+                host_id,
+                host_name,
+                pending_pair_secret,
+                transfer_label="install",
+            )
         print(f"Installed {final_status.get('name') or final_status.get('package') or source.name}")
         return 0
     if final_status.get("state") == "saved":
         if final_status.get("paired") and pending_pair_device and pending_pair_secret:
-            config["devices"][pending_pair_device] = {"host_id": host_id, "host_name": host_name, "secret": pending_pair_secret}
-            save_ble_config(config)
-            print(f"Saved trusted host for {pending_pair_device}")
+            remember_trusted_host(
+                config,
+                pending_pair_device,
+                host_id,
+                host_name,
+                pending_pair_secret,
+                transfer_label="save",
+            )
         print(f"Saved {final_status.get('path') or final_status.get('name') or source.name}")
         return 0
     print(f"Transfer failed: {final_status.get('error') or final_status}", file=sys.stderr)
