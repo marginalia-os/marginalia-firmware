@@ -42,9 +42,8 @@ bool BleTrustedHostStore::addOrReplaceHost(const BleTrustedHost& host) {
 }
 
 bool BleTrustedHostStore::removeHost(const std::string& hostId) {
-  const auto host = find_if(hosts.begin(), hosts.end(), [&hostId](const BleTrustedHost& item) {
-    return item.hostId == hostId;
-  });
+  const auto host =
+      find_if(hosts.begin(), hosts.end(), [&hostId](const BleTrustedHost& item) { return item.hostId == hostId; });
   if (host == hosts.end()) return false;
 
   hosts.erase(host);
@@ -53,9 +52,8 @@ bool BleTrustedHostStore::removeHost(const std::string& hostId) {
 }
 
 const BleTrustedHost* BleTrustedHostStore::findHost(const std::string& hostId) const {
-  const auto host = find_if(hosts.begin(), hosts.end(), [&hostId](const BleTrustedHost& item) {
-    return item.hostId == hostId;
-  });
+  const auto host =
+      find_if(hosts.begin(), hosts.end(), [&hostId](const BleTrustedHost& item) { return item.hostId == hostId; });
   return host == hosts.end() ? nullptr : &*host;
 }
 
