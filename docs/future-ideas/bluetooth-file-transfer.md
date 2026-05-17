@@ -45,7 +45,7 @@ Create a Marginalia BLE Transfer GATT service with four characteristics:
 
 Upload flow:
 
-1. User opens **Extensions > Transfer > Bluetooth**.
+1. User opens **File Transfer > Bluetooth Transfer**.
 2. Device advertises `Marginalia Transfer` for a limited window and keeps auto-sleep disabled.
 3. Client connects and sends `START_PUT` with destination class, filename, byte size, and SHA-256.
 4. Firmware opens a `.part` file under a staging directory.
@@ -89,9 +89,10 @@ on the next transfer-mode start unless a resumable manifest says they can contin
 Build SD-card package archive install first, because BLE uploads should land in the same `/.marginalia/sideload/`
 directory and reuse the same installer.
 
-Then prototype BLE transfer with NimBLE-Arduino behind a compile flag. Start with package upload only, because `.mpkg.zip`
-archives are small and already have size/SHA verification in the package path. Add crash-report download second. Add
-EPUB upload after the transfer protocol survives real phone testing.
+The first firmware implementation should live under **File Transfer > Bluetooth Transfer** and should use
+NimBLE-Arduino pinned to an upstream commit that embeds Apache NimBLE 1.9.0 or newer. Start with package upload only,
+because `.mpkg.zip` archives are small and already have size/SHA verification in the package path. Add crash-report
+download second. Add EPUB upload after the transfer protocol survives real phone testing.
 
 ## References
 
