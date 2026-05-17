@@ -751,9 +751,6 @@ void BleTransferActivity::resetTransfer(const bool removePart) {
   packageId_.clear();
   packageName_.clear();
   savedPath_.clear();
-  candidateHostId_.clear();
-  candidateHostName_.clear();
-  candidateHostSecret_.clear();
   transferKind_ = TransferKind::NONE;
   pendingFinalState_ = State::CONNECTED;
   expectedSize_ = 0;

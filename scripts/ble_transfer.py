@@ -114,6 +114,14 @@ def remember_trusted_host(
         print(f"Saved trusted host for {device_id}")
 
 
+def warn_pairing_not_saved(status: dict[str, Any], *, transfer_label: str) -> None:
+    pairing = status.get("pairing")
+    if pairing:
+        print(f"Warning: {transfer_label} succeeded, but trusted-host pairing was {pairing}.", file=sys.stderr)
+    else:
+        print(f"Warning: {transfer_label} succeeded, but the device did not confirm trusted-host pairing.", file=sys.stderr)
+
+
 async def find_device(timeout: float):
     print(f"Scanning for {DEVICE_NAME}...")
     devices = await BleakScanner.discover(timeout=timeout, return_adv=True)
@@ -250,6 +258,7 @@ async def put_file(
                     and not args.force_code
                 ):
                     response = trusted_response(str(trusted.get("secret", "")), device_nonce, str(trusted.get("host_id", host_id)))
+                    final_status = {}
                     await write_json(
                         client,
                         {
@@ -355,6 +364,8 @@ async def put_file(
                 pending_pair_secret,
                 transfer_label="install",
             )
+        elif pending_pair_device and pending_pair_secret:
+            warn_pairing_not_saved(final_status, transfer_label="install")
         print(f"Installed {final_status.get('name') or final_status.get('package') or source.name}")
         return 0
     if final_status.get("state") == "saved":
@@ -367,6 +378,8 @@ async def put_file(
                 pending_pair_secret,
                 transfer_label="save",
             )
+        elif pending_pair_device and pending_pair_secret:
+            warn_pairing_not_saved(final_status, transfer_label="save")
         print(f"Saved {final_status.get('path') or final_status.get('name') or source.name}")
         return 0
     print(f"Transfer failed: {final_status.get('error') or final_status}", file=sys.stderr)
