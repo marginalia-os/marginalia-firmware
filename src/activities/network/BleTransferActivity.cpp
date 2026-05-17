@@ -133,7 +133,9 @@ class DataCallbacks final : public NimBLECharacteristicCallbacks {
  public:
   explicit DataCallbacks(BleTransferActivity& activity) : activity_(activity) {}
 
-  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override { activity_.onDataWrite(characteristic->getValue()); }
+  void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
+    activity_.onDataWrite(characteristic->getValue());
+  }
 
  private:
   BleTransferActivity& activity_;
