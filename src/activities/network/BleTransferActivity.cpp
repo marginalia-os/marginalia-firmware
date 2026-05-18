@@ -12,8 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 #include "BleTrustedHostStore.h"
 #include "MappedInputManager.h"
@@ -38,6 +40,8 @@ constexpr size_t MAX_BLE_PACKAGE_BYTES = 4UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BOOK_BYTES = 32UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BMP_BYTES = 8UL * 1024UL * 1024UL;
 constexpr size_t BLE_DOWNLOAD_CHUNK_BYTES = 160;
+constexpr size_t BLE_DOWNLOAD_CHUNK_BYTES_MIN = 20;
+constexpr size_t BLE_DOWNLOAD_CHUNK_BYTES_MAX = BLE_DOWNLOAD_CHUNK_BYTES;
 constexpr size_t BLE_RESUME_HASH_CHUNK_BYTES = 512;
 constexpr size_t MAX_FILENAME_BYTES = 96;
 constexpr size_t BLE_HOST_ID_MAX_BYTES = 64;
@@ -669,13 +673,27 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
   if (op == "start_get") {
     resetTransfer(true);
 
+    const int64_t offsetValue = doc["offset"] | 0;
+    const int64_t chunkSizeValue = doc["chunk_size"] | static_cast<int64_t>(BLE_DOWNLOAD_CHUNK_BYTES);
+    if (offsetValue < 0 || offsetValue > static_cast<int64_t>(std::numeric_limits<size_t>::max())) {
+      setError("invalid download offset");
+      return;
+    }
+    if (chunkSizeValue < static_cast<int64_t>(BLE_DOWNLOAD_CHUNK_BYTES_MIN) ||
+        chunkSizeValue > static_cast<int64_t>(BLE_DOWNLOAD_CHUNK_BYTES_MAX)) {
+      setError("invalid download chunk size");
+      return;
+    }
+
+    const size_t offset = static_cast<size_t>(offsetValue);
+    const size_t chunkSize = static_cast<size_t>(chunkSizeValue);
     const std::string kind = doc["kind"] | "";
     if (kind == "crash_report") {
-      startCrashReportDownload();
+      startCrashReportDownload(offset, chunkSize);
       return;
     }
     if (kind == "package_state") {
-      startPackageStateDownload(doc["package_id"] | "");
+      startPackageStateDownload(doc["package_id"] | "", offset, chunkSize);
       return;
     }
     setError("unsupported transfer kind");
@@ -837,7 +855,7 @@ void BleTransferActivity::processCommit() {
   completeFinalState(State::INSTALLED);
 }
 
-void BleTransferActivity::startCrashReportDownload() {
+void BleTransferActivity::startCrashReportDownload(const size_t offset, const size_t chunkSize) {
   if (!Storage.exists(CRASH_REPORT_PATH)) {
     setError("not_found");
     return;
@@ -851,15 +869,33 @@ void BleTransferActivity::startCrashReportDownload() {
   fileName_ = CRASH_REPORT_NAME;
   transferKind_ = TransferKind::CRASH_REPORT;
   expectedSize_ = downloadFile_.fileSize();
-  sentBytes_ = 0;
-  downloadSequence_ = 0;
+  if (offset > expectedSize_) {
+    downloadFile_.close();
+    setError("invalid download offset");
+    return;
+  }
+  if (offset < expectedSize_ && offset % chunkSize != 0) {
+    downloadFile_.close();
+    setError("unaligned download offset");
+    return;
+  }
+  if (!downloadFile_.seek(offset)) {
+    downloadFile_.close();
+    setError("could not seek crash report");
+    return;
+  }
+  sentBytes_ = offset;
+  downloadSequence_ = static_cast<uint32_t>(offset / chunkSize);
   pendingDownloadAck_ = 0;
   downloadAwaitingAck_ = false;
+  downloadChunkSize_ = chunkSize;
+  lastProgressStatusBytes_ = sentBytes_;
   downloadOpen_ = true;
   setState(State::SENDING);
 }
 
-void BleTransferActivity::startPackageStateDownload(const std::string& packageId) {
+void BleTransferActivity::startPackageStateDownload(const std::string& packageId, const size_t offset,
+                                                    const size_t chunkSize) {
   if (!Marginalia::isSafePackageId(packageId)) {
     setError("invalid package id");
     return;
@@ -880,10 +916,27 @@ void BleTransferActivity::startPackageStateDownload(const std::string& packageId
   fileName_ = packageId + ".json";
   transferKind_ = TransferKind::PACKAGE_STATE;
   expectedSize_ = downloadFile_.fileSize();
-  sentBytes_ = 0;
-  downloadSequence_ = 0;
+  if (offset > expectedSize_) {
+    downloadFile_.close();
+    setError("invalid download offset");
+    return;
+  }
+  if (offset < expectedSize_ && offset % chunkSize != 0) {
+    downloadFile_.close();
+    setError("unaligned download offset");
+    return;
+  }
+  if (!downloadFile_.seek(offset)) {
+    downloadFile_.close();
+    setError("could not seek package state");
+    return;
+  }
+  sentBytes_ = offset;
+  downloadSequence_ = static_cast<uint32_t>(offset / chunkSize);
   pendingDownloadAck_ = 0;
   downloadAwaitingAck_ = false;
+  downloadChunkSize_ = chunkSize;
+  lastProgressStatusBytes_ = sentBytes_;
   downloadOpen_ = true;
   setState(State::SENDING);
 }
@@ -901,7 +954,7 @@ void BleTransferActivity::pumpDownload() {
   frame[2] = static_cast<uint8_t>((downloadSequence_ >> 16) & 0xFF);
   frame[3] = static_cast<uint8_t>((downloadSequence_ >> 24) & 0xFF);
 
-  const int read = downloadFile_.read(frame.data() + sizeof(uint32_t), BLE_DOWNLOAD_CHUNK_BYTES);
+  const int read = downloadFile_.read(frame.data() + sizeof(uint32_t), downloadChunkSize_);
   if (read < 0) {
     downloadFile_.close();
     downloadOpen_ = false;
@@ -1033,6 +1086,7 @@ void BleTransferActivity::resetTransfer(const bool removePart) {
   lastProgressStatusBytes_ = 0;
   uploadChunkSize_ = 0;
   uploadAckBytes_ = BLE_PROGRESS_STATUS_INTERVAL_BYTES;
+  downloadChunkSize_ = BLE_DOWNLOAD_CHUNK_BYTES;
   expectedSequence_ = 0;
   downloadSequence_ = 0;
   pendingDownloadAck_ = 0;
