@@ -2949,12 +2949,13 @@
 
     // Show convert options only when at least one selected file is an EPUB.
     const hasEpub = Array.from(files).some(f => f.name.toLowerCase().endsWith('.epub'));
-    if (files.length > 0 && hasEpub) {
+    const detectionReady = DEVICE_TARGET !== 'auto' || DEVICE_DETECTION_COMPLETE;
+    if (files.length > 0 && hasEpub && detectionReady) {
       convertOptions.style.display = 'block';
     } else {
       convertOptions.style.display = 'none';
       // Clear stale checkbox state so the "Optimize & Upload" button doesn't linger
-      // when the user re-picks a non-EPUB after having ticked Optimize for an EPUB.
+      // when the user re-picks a non-EPUB, or when Auto device detection is still pending.
       const cb = document.getElementById('convertBeforeUpload');
       if (cb && cb.checked) {
         cb.checked = false;
@@ -3023,6 +3024,7 @@ const DEFAULT_ENABLE_GRAYSCALE = true;
 // Dynamic conversion settings (updated by UI)
 let DEVICE_TARGET = 'auto';      // 'auto' | 'X4' | 'X3'
 let DETECTED_DEVICE = null;      // populated from /api/status
+let DEVICE_DETECTION_COMPLETE = false;
 let ACTIVE_DEVICE = DEFAULT_DEVICE;
 let MAX_WIDTH = DEFAULT_MAX_WIDTH;
 let MAX_HEIGHT = DEFAULT_MAX_HEIGHT;
@@ -3061,11 +3063,17 @@ async function fetchVersion() {
       marginaliaVersion = data.version || 'Unknown';
       if (data.device === 'X3' || data.device === 'X4') {
         DETECTED_DEVICE = data.device;
-        applyDeviceTarget();
       }
     }
   } catch (e) {
     console.error('Failed to fetch version:', e);
+  } finally {
+    DEVICE_DETECTION_COMPLETE = true;
+    applyDeviceTarget();
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+      validateFile();
+    }
   }
 }
 
@@ -3086,7 +3094,9 @@ function applyDeviceTarget() {
   });
   const autoLabel = document.getElementById('deviceAutoLabel');
   if (autoLabel) {
-    autoLabel.textContent = DETECTED_DEVICE ? `Auto (${DETECTED_DEVICE})` : 'Auto';
+    autoLabel.textContent = DEVICE_DETECTION_COMPLETE
+      ? (DETECTED_DEVICE ? `Auto (${DETECTED_DEVICE})` : `Auto (${DEFAULT_DEVICE})`)
+      : 'Auto (detecting...)';
   }
 
   // Recompute picker classification with new dimensions, then refresh grid.
@@ -3095,6 +3105,12 @@ function applyDeviceTarget() {
       img.fitsScreen = (img.width <= MAX_WIDTH && img.height <= MAX_HEIGHT);
       img.canHSplit = img.width >= MAX_HEIGHT;
       img.canVSplit = img.height >= MAX_HEIGHT;
+      const state = imageStates[img.path] || 0;
+      const invalidHSplit = state === 1 && (img.fitsScreen || !img.canHSplit);
+      const invalidVSplit = state === 2 && (img.fitsScreen || !img.canVSplit);
+      if (invalidHSplit || invalidVSplit) {
+        imageStates[img.path] = 0;
+      }
     }
     const pickerSection = document.getElementById('imagePickerSection');
     if (pickerSection && pickerSection.style.display !== 'none' && typeof renderImageGrid === 'function') {
@@ -3939,6 +3955,12 @@ async function processImage(data, imageState = 0, imagePath = '') {
       clearTimeout(timeoutId);
       URL.revokeObjectURL(url);
       const origW = img.width, origH = img.height;
+      const fitsScreen = origW <= MAX_WIDTH && origH <= MAX_HEIGHT;
+      if ((imageState === 1 && (fitsScreen || origW < MAX_HEIGHT)) ||
+          (imageState === 2 && (fitsScreen || origH < MAX_HEIGHT))) {
+        imageState = 0;
+        if (imagePath) imageStates[imagePath] = 0;
+      }
 
       // imageState: 0=Normal, 1=H-Split (CW/CCW), 2=V-Split, 3=Rotate & Fit
       // ========================================================================
