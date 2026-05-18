@@ -74,7 +74,12 @@ The UI should not ask for a code before trying a saved trusted host. Code entry 
 9. Companion waits for `installed` or `saved`.
 10. If the firmware returns a pairing prompt after a code-authenticated upload, companion shows **Save this computer?**.
 
+Safe filename validation must match the firmware rules documented in
+`docs/future-ideas/bluetooth-file-transfer.md`: basename only, no leading `.`, ASCII letters/digits plus `.`, `_`, and
+`-`, extension-specific suffixes, and the firmware filename length limit.
+
 Package uploads should clearly separate "uploaded" from "installed". Book and BMP uploads finish at "saved".
+The **Save this computer?** prompt stays suppressed until firmware reports a final `installed` or `saved` state.
 
 ### Download Diagnostics
 
@@ -87,6 +92,17 @@ Package uploads should clearly separate "uploaded" from "installed". Book and BM
 7. Companion saves a local file using the browser download API.
 
 Downloads must not offer arbitrary path input. The UI only exposes the two firmware allowlisted download kinds.
+
+### Browser Close
+
+During an active `start_put` or `start_get` transfer, the companion should register a `beforeunload` handler so the
+browser warns before tab or window closure. If the user closes anyway, the BLE connection is expected to drop.
+
+For uploads, firmware owns incomplete `.part` cleanup on disconnect or transfer reset. The companion should not mark the
+operation complete unless firmware reports `installed` or `saved`.
+
+For downloads, the companion should discard any incomplete local blob unless firmware reports final `sent`. Resume is out
+of scope for the first companion UI, so a later reconnect starts a fresh download.
 
 ## Protocol Mapping
 
@@ -125,6 +141,9 @@ IndexedDB is preferred if the Hub stack already has a small storage helper.
 Security notes:
 
 - the secret is scoped to the browser profile and origin
+- browser-local storage does not provide encryption at rest; stored secrets rely on OS file permissions and browser
+  profile isolation
+- anyone with access to the computer and browser profile may be able to read stored trusted-host secrets
 - clearing browser site data removes trusted-host auth
 - the UI must keep the visible-code fallback
 - the UI should expose a **Forget saved reader** action
@@ -166,6 +185,7 @@ Important cases:
 - SHA-256 mismatch
 - package install failed
 - download sequence mismatch
+- browser/tab closed during an active transfer
 
 On transfer failure, companion should send `cancel` if still connected. If the connection is already gone, the firmware
 is responsible for `.part` cleanup on disconnect/reset, matching the existing protocol.
