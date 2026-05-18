@@ -185,7 +185,7 @@ This is useful for organizing your library by genre, author, series or file type
 
 For power users, you can manage files directly from your terminal using `curl` while the device is in File Upload mode. Detailed documentation can be found [here](./webserver-endpoints.md). 
 
-## Bluetooth Package Transfer
+## Bluetooth File Transfer
 
 Packages and EPUB books can also be transferred without Wi-Fi from **File Transfer > Bluetooth Transfer**. Keep that
 screen open, note the six-digit code, then run:
