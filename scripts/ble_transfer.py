@@ -34,6 +34,8 @@ DEVICE_NAME = "Marginalia Transfer"
 PROGRESS_PRINT_BYTES = 4096
 PROGRESS_PRINT_SECONDS = 1.0
 DEFAULT_WINDOW_BYTES = 960
+MIN_WINDOW_BYTES = 20
+MAX_WINDOW_BYTES = 65536
 CONFIG_PATH = Path(os.environ.get("MARGINALIA_BLE_CONFIG", "~/.config/marginalia/ble_hosts.json")).expanduser()
 PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,95}$")
 
@@ -749,6 +751,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def window_bytes_arg(value: str) -> int:
+    parsed = positive_int(value)
+    if parsed < MIN_WINDOW_BYTES or parsed > MAX_WINDOW_BYTES:
+        raise argparse.ArgumentTypeError(f"must be between {MIN_WINDOW_BYTES} and {MAX_WINDOW_BYTES}")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -769,7 +778,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     put.add_argument(
         "--window-bytes",
-        type=positive_int,
+        type=window_bytes_arg,
         default=DEFAULT_WINDOW_BYTES,
         help="Bytes sent before waiting for receiver progress in windowed mode",
     )
@@ -801,7 +810,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     put_book_parser.add_argument(
         "--window-bytes",
-        type=positive_int,
+        type=window_bytes_arg,
         default=DEFAULT_WINDOW_BYTES,
         help="Bytes sent before waiting for receiver progress in windowed mode",
     )
@@ -833,7 +842,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     put_bmp_parser.add_argument(
         "--window-bytes",
-        type=positive_int,
+        type=window_bytes_arg,
         default=DEFAULT_WINDOW_BYTES,
         help="Bytes sent before waiting for receiver progress in windowed mode",
     )
