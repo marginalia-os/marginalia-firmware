@@ -55,6 +55,8 @@ Implemented pieces:
 - `.epub` book upload to `/Books/` with `scripts/ble_transfer.py put-book`
 - `/crash_report.txt` download with `scripts/ble_transfer.py get-crash-report`
 - package state download with `scripts/ble_transfer.py get-package-state <package-id>`
+- advertising restart after failed or unauthenticated sessions, so the same Bluetooth Transfer screen can accept a
+  follow-up code-based retry without being reopened
 
 Download notifications originally arrived out of order on hardware, so crash-report download now uses stop-and-go ACKs:
 the device sends one numbered `data-out` frame, the host validates it, then the host sends `get_ack` before the next
@@ -73,21 +75,29 @@ Upload flow:
 
 1. User opens **File Transfer > Bluetooth Transfer**.
 2. Device advertises `Marginalia Transfer` for a limited window and keeps auto-sleep disabled.
-3. Client connects and sends `start_put` with destination class, filename, byte size, and SHA-256.
-4. Firmware opens a `.part` file under a staging directory.
-5. Client streams numbered chunks to `data-in`.
-6. Firmware acknowledges progress through `status`.
-7. Client sends `commit`.
-8. Firmware verifies byte count and SHA-256, renames into the final approved path, then offers install if it is an
+3. Client connects and authenticates with the visible code or trusted-host challenge response.
+4. Client sends `start_put` with destination class, filename, byte size, and SHA-256.
+5. Firmware opens a `.part` file under a staging directory.
+6. Client streams numbered chunks to `data-in`.
+7. Firmware acknowledges progress through `status`.
+8. Client sends `commit`.
+9. Firmware verifies byte count and SHA-256, renames into the final approved path, then offers install if it is an
    `.mpkg.zip`.
 
 Download flow:
 
-1. Client sends `start_get` for an approved diagnostic kind such as `crash_report`.
-2. Firmware sends one numbered chunk over `data-out`.
-3. Client validates the sequence and sends `get_ack`.
-4. Firmware sends the next chunk, repeating until complete.
-5. Firmware publishes final `sent` status.
+1. User opens **File Transfer > Bluetooth Transfer**.
+2. Device advertises `Marginalia Transfer` for a limited window and keeps auto-sleep disabled.
+3. Client connects and authenticates with the visible code or trusted-host challenge response.
+4. Client sends `start_get` for an approved diagnostic kind such as `crash_report` or `package_state`.
+5. Firmware sends one numbered chunk over `data-out`.
+6. Client validates the sequence and sends `get_ack`.
+7. Firmware sends the next chunk, repeating until complete.
+8. Firmware publishes final `sent` status.
+
+If authentication fails and the client disconnects, the firmware clears the accepted session state, rotates the
+trusted-host nonce, returns to `ADVERTISING`, and restarts BLE advertising while the Bluetooth Transfer screen remains
+open. This keeps the visible code fallback usable after a stale trusted-host record or a mistyped code.
 
 Resume from byte offsets is not implemented yet.
 
@@ -125,8 +135,8 @@ Use application-level trust before OS BLE bonding. NimBLE bonding and encrypted 
 the first paired-host flow should be testable through Bleak on macOS, Linux, and phones without relying on platform-
 specific bonding behavior.
 
-The protocol treats disconnects as normal. Incomplete uploads remain as `.part` files in staging and are removed on the
-next transfer-mode start. A resumable manifest is still future work.
+The protocol treats disconnects as normal. Incomplete uploads remain as `.part` files in staging and are removed when
+the interrupted transfer is reset or the transfer screen exits. A resumable manifest is still future work.
 
 ## Remaining Work
 
