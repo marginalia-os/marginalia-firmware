@@ -28,7 +28,7 @@ class BleTransferActivity final : public Activity {
     FORGET_HOST_PROMPT,
     ERROR
   };
-  enum class TransferKind { NONE, PACKAGE, BOOK, CRASH_REPORT, PACKAGE_STATE };
+  enum class TransferKind { NONE, PACKAGE, BOOK, BMP, CRASH_REPORT, PACKAGE_STATE };
 
   explicit BleTransferActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
   ~BleTransferActivity() override;

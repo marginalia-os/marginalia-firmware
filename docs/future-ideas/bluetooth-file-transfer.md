@@ -53,6 +53,7 @@ Implemented pieces:
 - firmware trusted-host storage on SD card with hardware-tied secret obfuscation
 - `.mpkg.zip` package upload and install with `scripts/ble_transfer.py put-package`
 - `.epub` book upload to `/Books/` with `scripts/ble_transfer.py put-book`
+- `.bmp` image upload to `/Pictures/` with `scripts/ble_transfer.py put-bmp`
 - `/crash_report.txt` download with `scripts/ble_transfer.py get-crash-report`
 - package state download with `scripts/ble_transfer.py get-package-state <package-id>`
 - advertising restart after failed or unauthenticated sessions, so the same Bluetooth Transfer screen can accept a
@@ -107,6 +108,7 @@ Current write support is narrow:
 
 - `/.marginalia/sideload/<safe-name>.mpkg.zip`
 - `/Books/<safe-name>.epub`
+- `/Pictures/<safe-name>.bmp`
 
 Current read support is narrow:
 
@@ -142,19 +144,16 @@ the interrupted transfer is reset or the transfer screen exits. A resumable mani
 
 Useful follow-up PRs, in recommended order:
 
-1. BMP upload.
-   Add a `put-bmp` style upload kind only if there is a clear destination and UI path for viewing imported images. Reuse
-   the existing upload helper and keep extension/path validation strict.
-2. Phone or web companion UI.
+1. Phone or web companion UI.
    Build a small user-facing client once the Python CLI protocol has stabilized. The UI should use the same code/trusted
    host model rather than introducing a second pairing concept.
-3. Resumable transfers.
+2. Resumable transfers.
    Add transfer manifests and byte-offset resume only if large files or phone clients make interruption recovery
    necessary. This should cover both uploads and downloads.
-4. BLE OTA.
+3. BLE OTA.
    Defer until resumability, rollback UX, and stronger authenticity checks are in place. Firmware images are larger and
    failed updates have higher support cost than book/package transfers.
-5. OS BLE bonding or encrypted characteristics.
+4. OS BLE bonding or encrypted characteristics.
    Application-level trust is enough for the current CLI and is easier to test across macOS, Linux, and phones. Bonding
    can be layered on later if the phone UI needs platform-native trust.
 

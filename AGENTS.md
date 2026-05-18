@@ -40,6 +40,7 @@ Host CLI:
 ```sh
 python3 scripts/ble_transfer.py put-package path/to/package.mpkg.zip --code 123456
 python3 scripts/ble_transfer.py put-book path/to/book.epub --code 123456
+python3 scripts/ble_transfer.py put-bmp path/to/image.bmp --code 123456
 python3 scripts/ble_transfer.py get-crash-report ./crash_report.txt --code 123456
 python3 scripts/ble_transfer.py get-package-state org.example.package ./state.json --code 123456
 ```
@@ -89,4 +90,3 @@ Update docs with behavior changes:
 - Design specs: `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 
 Keep future-ideas docs honest: move shipped work out of "Remaining Work".
-
