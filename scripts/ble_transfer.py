@@ -341,6 +341,13 @@ async def put_file(
                     return 1
 
                 transfer_started = True
+                negotiated_ack_bytes = args.window_bytes
+                if args.transfer_mode == "windowed":
+                    ack_bytes = start_status.get("ack_bytes", args.window_bytes)
+                    if not isinstance(ack_bytes, int) or ack_bytes < MIN_WINDOW_BYTES or ack_bytes > MAX_WINDOW_BYTES:
+                        print(f"\nDevice returned invalid ACK window: {ack_bytes}", file=sys.stderr)
+                        return 1
+                    negotiated_ack_bytes = ack_bytes
                 resume_offset = start_status.get("received", 0) if args.resume else 0
                 if not isinstance(resume_offset, int) or resume_offset < 0 or resume_offset > size:
                     print(f"\nDevice returned invalid resume offset: {resume_offset}", file=sys.stderr)
@@ -364,7 +371,7 @@ async def put_file(
                         await client.write_gatt_char(DATA_IN_UUID, frame, response=args.transfer_mode == "response")
                         sequence += 1
                         sent_bytes += len(payload)
-                        if args.transfer_mode == "windowed" and sent_bytes - ack_floor >= args.window_bytes:
+                        if args.transfer_mode == "windowed" and sent_bytes - ack_floor >= negotiated_ack_bytes:
                             ack_floor = sent_bytes
                             if not await wait_for_received(ack_floor, args.control_timeout):
                                 error = final_status.get("error") or f"receiver did not acknowledge {ack_floor} bytes"
