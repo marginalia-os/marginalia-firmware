@@ -45,6 +45,8 @@ constexpr size_t BLE_HOST_NAME_MAX_BYTES = 48;
 constexpr size_t BLE_SHARED_SECRET_HEX_BYTES = 64;
 constexpr size_t BLE_NONCE_BYTES = 16;
 constexpr size_t BLE_PROGRESS_STATUS_INTERVAL_BYTES = 4UL * 1024UL;
+constexpr size_t BLE_UPLOAD_ACK_BYTES_MIN = 20;
+constexpr size_t BLE_UPLOAD_ACK_BYTES_MAX = 64UL * 1024UL;
 constexpr size_t MPKG_SUFFIX_LEN = 9;
 constexpr size_t EPUB_SUFFIX_LEN = 5;
 constexpr size_t BMP_SUFFIX_LEN = 4;
@@ -539,6 +541,7 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
     expectedSha256_ = toLowerAscii(doc["sha256"] | "");
     uploadResumable_ = doc["resume"] | false;
     uploadChunkSize_ = doc["chunk_size"] | 0;
+    uploadAckBytes_ = doc["ack_bytes"] | BLE_PROGRESS_STATUS_INTERVAL_BYTES;
     transferKind_ = TransferKind::NONE;
 
     if (!isHexSha256(expectedSha256_)) {
@@ -547,6 +550,10 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
     }
     if (uploadResumable_ && uploadChunkSize_ == 0) {
       setError("invalid resume chunk size");
+      return;
+    }
+    if (uploadAckBytes_ < BLE_UPLOAD_ACK_BYTES_MIN || uploadAckBytes_ > BLE_UPLOAD_ACK_BYTES_MAX) {
+      setError("invalid ack window");
       return;
     }
     if (kind == "package") {
@@ -654,6 +661,7 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
     }
     transferOpen_ = true;
     removePartOnExit_ = true;
+    lastProgressStatusBytes_ = receivedBytes_;
     setState(State::RECEIVING);
     return;
   }
@@ -741,8 +749,7 @@ void BleTransferActivity::onDataWrite(const std::string& value) {
   mbedtls_sha256_update(&shaContext_, payload, payloadSize);
   receivedBytes_ += payloadSize;
   expectedSequence_++;
-  if (receivedBytes_ == expectedSize_ ||
-      receivedBytes_ - lastProgressStatusBytes_ >= BLE_PROGRESS_STATUS_INTERVAL_BYTES) {
+  if (receivedBytes_ == expectedSize_ || receivedBytes_ - lastProgressStatusBytes_ >= uploadAckBytes_) {
     lastProgressStatusBytes_ = receivedBytes_;
     statusDirty_ = true;
     requestUpdate();
@@ -1025,6 +1032,7 @@ void BleTransferActivity::resetTransfer(const bool removePart) {
   sentBytes_ = 0;
   lastProgressStatusBytes_ = 0;
   uploadChunkSize_ = 0;
+  uploadAckBytes_ = BLE_PROGRESS_STATUS_INTERVAL_BYTES;
   expectedSequence_ = 0;
   downloadSequence_ = 0;
   pendingDownloadAck_ = 0;
@@ -1072,6 +1080,7 @@ std::string BleTransferActivity::buildStatusJson() const {
     } else {
       doc["received"] = receivedBytes_;
       if (uploadResumable_) doc["resumable"] = true;
+      doc["ack_bytes"] = uploadAckBytes_;
     }
     doc["size"] = expectedSize_;
   }

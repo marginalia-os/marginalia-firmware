@@ -78,6 +78,7 @@ class BleTransferActivity final : public Activity {
   size_t sentBytes_ = 0;
   size_t lastProgressStatusBytes_ = 0;
   size_t uploadChunkSize_ = 0;
+  size_t uploadAckBytes_ = 0;
   uint32_t expectedSequence_ = 0;
   uint32_t downloadSequence_ = 0;
   uint32_t pendingDownloadAck_ = 0;

@@ -198,10 +198,11 @@ python3 scripts/ble_transfer.py get-crash-report ./crash_report.txt --code 12345
 python3 scripts/ble_transfer.py get-package-state org.example.package ./package-state.json --code 123456
 ```
 
-The tool scans for `Marginalia Transfer`, streams the file over BLE, and waits for the device to verify it. Package
-archives are installed through the package inbox; EPUB files are saved to `/Books`; BMP images are saved to `/Pictures`;
-diagnostic downloads are limited to approved read-only files. After a successful code-based upload, the device can save
-the host so later transfers can omit `--code`. General SD-card browsing still uses the web file manager.
+The tool scans for `Marginalia Transfer`, streams the file over BLE with windowed receiver ACKs, and waits for the
+device to verify it. Package archives are installed through the package inbox; EPUB files are saved to `/Books`; BMP
+images are saved to `/Pictures`; diagnostic downloads are limited to approved read-only files. After a successful
+code-based upload, the device can save the host so later transfers can omit `--code`. General SD-card browsing still
+uses the web file manager.
 
 If an upload disconnects while the Bluetooth Transfer screen remains open, rerun the same upload command with
 `--resume` to continue from the partial file kept on the device.
