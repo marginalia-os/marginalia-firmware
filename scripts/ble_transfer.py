@@ -426,6 +426,16 @@ async def put_book(args: argparse.Namespace) -> int:
     )
 
 
+async def put_bmp(args: argparse.Namespace) -> int:
+    return await put_file(
+        args,
+        kind="bmp",
+        path_arg=args.image,
+        required_suffix=".bmp",
+        success_states={"saved"},
+    )
+
+
 async def get_ble_download(
     args: argparse.Namespace,
     *,
@@ -767,6 +777,31 @@ def build_parser() -> argparse.ArgumentParser:
     put_book_parser.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     put_book_parser.add_argument("--save-timeout", type=float, default=60.0, help="Save result timeout, in seconds")
 
+    put_bmp_parser = sub.add_parser("put-bmp", help="Upload a .bmp image")
+    put_bmp_parser.add_argument("image", help="Path to the .bmp image")
+    put_bmp_parser.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
+    put_bmp_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
+    put_bmp_parser.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
+    put_bmp_parser.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
+    put_bmp_parser.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
+    put_bmp_parser.add_argument(
+        "--transfer-mode",
+        choices=("windowed", "response", "no-response"),
+        default="windowed",
+        help="BLE write strategy: windowed is faster with receiver ACKs; response is slowest; no-response is unsafe",
+    )
+    put_bmp_parser.add_argument("--window-bytes", type=positive_int, default=DEFAULT_WINDOW_BYTES, help="Bytes sent before waiting for receiver progress in windowed mode")
+    put_bmp_parser.add_argument(
+        "--write-without-response",
+        dest="transfer_mode",
+        action="store_const",
+        const="no-response",
+        help="Deprecated alias for --transfer-mode no-response; may require --chunk-delay",
+    )
+    put_bmp_parser.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
+    put_bmp_parser.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
+    put_bmp_parser.add_argument("--save-timeout", type=float, default=60.0, help="Save result timeout, in seconds")
+
     get_crash = sub.add_parser("get-crash-report", help="Download /crash_report.txt")
     get_crash.add_argument("output", nargs="?", default="crash_report.txt", help="Output path")
     get_crash.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
@@ -798,6 +833,9 @@ def main() -> int:
     if args.command == "put-book":
         args.install_timeout = args.save_timeout
         return asyncio.run(put_book(args))
+    if args.command == "put-bmp":
+        args.install_timeout = args.save_timeout
+        return asyncio.run(put_bmp(args))
     if args.command == "get-crash-report":
         return asyncio.run(get_crash_report(args))
     if args.command == "get-package-state":

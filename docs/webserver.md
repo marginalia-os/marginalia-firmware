@@ -185,7 +185,7 @@ This is useful for organizing your library by genre, author, series or file type
 
 For power users, you can manage files directly from your terminal using `curl` while the device is in File Upload mode. Detailed documentation can be found [here](./webserver-endpoints.md). 
 
-## Bluetooth Package Transfer
+## Bluetooth File Transfer
 
 Packages and EPUB books can also be transferred without Wi-Fi from **File Transfer > Bluetooth Transfer**. Keep that
 screen open, note the six-digit code, then run:
@@ -193,14 +193,15 @@ screen open, note the six-digit code, then run:
 ```sh
 python3 scripts/ble_transfer.py put-package path/to/package.mpkg.zip --code 123456
 python3 scripts/ble_transfer.py put-book path/to/book.epub --code 123456
+python3 scripts/ble_transfer.py put-bmp path/to/image.bmp --code 123456
 python3 scripts/ble_transfer.py get-crash-report ./crash_report.txt --code 123456
 python3 scripts/ble_transfer.py get-package-state org.example.package ./package-state.json --code 123456
 ```
 
 The tool scans for `Marginalia Transfer`, streams the file over BLE, and waits for the device to verify it. Package
-archives are installed through the package inbox; EPUB files are saved to `/Books`; diagnostic downloads are limited to
-approved read-only files. After a successful code-based upload, the device can save the host so later transfers can omit
-`--code`. General SD-card browsing still uses the web file manager.
+archives are installed through the package inbox; EPUB files are saved to `/Books`; BMP images are saved to `/Pictures`;
+diagnostic downloads are limited to approved read-only files. After a successful code-based upload, the device can save
+the host so later transfers can omit `--code`. General SD-card browsing still uses the web file manager.
 
 ## Security Notes
 

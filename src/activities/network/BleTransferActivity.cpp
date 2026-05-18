@@ -31,10 +31,12 @@ constexpr const char* BLE_DATA_IN_UUID = "6f9f0a02-9b1d-4d1f-9f53-5b6b8b3d0f10";
 constexpr const char* BLE_STATUS_UUID = "6f9f0a03-9b1d-4d1f-9f53-5b6b8b3d0f10";
 constexpr const char* BLE_DATA_OUT_UUID = "6f9f0a04-9b1d-4d1f-9f53-5b6b8b3d0f10";
 constexpr const char* BOOKS_ROOT = "/Books";
+constexpr const char* PICTURES_ROOT = "/Pictures";
 constexpr const char* CRASH_REPORT_PATH = "/crash_report.txt";
 constexpr const char* CRASH_REPORT_NAME = "crash_report.txt";
 constexpr size_t MAX_BLE_PACKAGE_BYTES = 4UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BOOK_BYTES = 32UL * 1024UL * 1024UL;
+constexpr size_t MAX_BLE_BMP_BYTES = 8UL * 1024UL * 1024UL;
 constexpr size_t BLE_DOWNLOAD_CHUNK_BYTES = 160;
 constexpr size_t MAX_FILENAME_BYTES = 96;
 constexpr size_t BLE_HOST_ID_MAX_BYTES = 64;
@@ -44,6 +46,7 @@ constexpr size_t BLE_NONCE_BYTES = 16;
 constexpr size_t BLE_PROGRESS_STATUS_INTERVAL_BYTES = 4UL * 1024UL;
 constexpr size_t MPKG_SUFFIX_LEN = 9;
 constexpr size_t EPUB_SUFFIX_LEN = 5;
+constexpr size_t BMP_SUFFIX_LEN = 4;
 
 std::string makeSessionCode() {
   char buffer[7];
@@ -102,6 +105,12 @@ bool endsWithEpub(const std::string& value) {
   return toLowerAscii(value.substr(value.length() - EPUB_SUFFIX_LEN)) == suffix;
 }
 
+bool endsWithBmp(const std::string& value) {
+  constexpr const char* suffix = ".bmp";
+  if (value.length() < BMP_SUFFIX_LEN) return false;
+  return toLowerAscii(value.substr(value.length() - BMP_SUFFIX_LEN)) == suffix;
+}
+
 bool isSafeBleFileName(const std::string& value) {
   if (value.empty() || value.length() > MAX_FILENAME_BYTES || value[0] == '.') return false;
   for (const char c : value) {
@@ -134,12 +143,16 @@ bool isSafeBlePackageName(const std::string& value) { return isSafeBleFileName(v
 
 bool isSafeBleBookName(const std::string& value) { return isSafeBleFileName(value) && endsWithEpub(value); }
 
+bool isSafeBleBmpName(const std::string& value) { return isSafeBleFileName(value) && endsWithBmp(value); }
+
 std::string transferKindName(const BleTransferActivity::TransferKind kind) {
   switch (kind) {
     case BleTransferActivity::TransferKind::PACKAGE:
       return "package";
     case BleTransferActivity::TransferKind::BOOK:
       return "book";
+    case BleTransferActivity::TransferKind::BMP:
+      return "bmp";
     case BleTransferActivity::TransferKind::CRASH_REPORT:
       return "crash_report";
     case BleTransferActivity::TransferKind::PACKAGE_STATE:
@@ -535,6 +548,26 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
         setError("exists");
         return;
       }
+    } else if (kind == "bmp") {
+      if (!isSafeBleBmpName(fileName_)) {
+        setError("unsafe bmp filename");
+        return;
+      }
+      if (expectedSize_ == 0 || expectedSize_ > MAX_BLE_BMP_BYTES) {
+        setError("invalid bmp size");
+        return;
+      }
+      if (!Storage.exists(PICTURES_ROOT) && !Storage.mkdir(PICTURES_ROOT)) {
+        setError("could not create pictures directory");
+        return;
+      }
+      transferKind_ = TransferKind::BMP;
+      partPath_ = std::string(PICTURES_ROOT) + "/.ble-" + fileName_ + ".part";
+      finalPath_ = std::string(PICTURES_ROOT) + "/" + fileName_;
+      if (Storage.exists(finalPath_.c_str())) {
+        setError("exists");
+        return;
+      }
     } else {
       setError("unsupported transfer kind");
       return;
@@ -670,7 +703,8 @@ void BleTransferActivity::processCommit() {
     return;
   }
 
-  if (transferKind_ == TransferKind::BOOK && Storage.exists(finalPath_.c_str())) {
+  if ((transferKind_ == TransferKind::BOOK || transferKind_ == TransferKind::BMP) &&
+      Storage.exists(finalPath_.c_str())) {
     setError("exists");
     resetTransfer(true);
     return;
@@ -689,7 +723,7 @@ void BleTransferActivity::processCommit() {
   }
   removePartOnExit_ = false;
 
-  if (transferKind_ == TransferKind::BOOK) {
+  if (transferKind_ == TransferKind::BOOK || transferKind_ == TransferKind::BMP) {
     savedPath_ = finalPath_;
     completeFinalState(State::SAVED);
     return;
