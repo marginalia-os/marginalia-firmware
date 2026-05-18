@@ -371,7 +371,10 @@ async def put_file(
                         if args.chunk_delay > 0:
                             await asyncio.sleep(args.chunk_delay)
                         if args.debug_stop_after_bytes and sent_bytes >= args.debug_stop_after_bytes and sent_bytes < size:
-                            await wait_for_received(sent_bytes, args.control_timeout)
+                            if not await wait_for_received(sent_bytes, args.control_timeout):
+                                error = final_status.get("error") or f"receiver did not acknowledge {sent_bytes} bytes"
+                                print(f"\nTransfer failed: {error}", file=sys.stderr)
+                                return 1
                             received = final_status.get("received")
                             if isinstance(received, int) and received > 0:
                                 print(f"\nStopped after last reported {received}/{size} bytes for resume testing.", file=sys.stderr)
