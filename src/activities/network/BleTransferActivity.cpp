@@ -38,6 +38,7 @@ constexpr size_t MAX_BLE_PACKAGE_BYTES = 4UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BOOK_BYTES = 32UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BMP_BYTES = 8UL * 1024UL * 1024UL;
 constexpr size_t BLE_DOWNLOAD_CHUNK_BYTES = 160;
+constexpr size_t BLE_RESUME_HASH_CHUNK_BYTES = 512;
 constexpr size_t MAX_FILENAME_BYTES = 96;
 constexpr size_t BLE_HOST_ID_MAX_BYTES = 64;
 constexpr size_t BLE_HOST_NAME_MAX_BYTES = 48;
@@ -215,6 +216,26 @@ uint32_t readLe32(const std::string& value) {
   const auto* b = reinterpret_cast<const uint8_t*>(value.data());
   return static_cast<uint32_t>(b[0]) | (static_cast<uint32_t>(b[1]) << 8) | (static_cast<uint32_t>(b[2]) << 16) |
          (static_cast<uint32_t>(b[3]) << 24);
+}
+
+bool hashExistingPrefix(const std::string& path, size_t bytes, mbedtls_sha256_context& context) {
+  FsFile file;
+  if (!Storage.openFileForRead("BLE", path, file)) return false;
+
+  std::array<uint8_t, BLE_RESUME_HASH_CHUNK_BYTES> buffer = {};
+  while (bytes > 0) {
+    const size_t wanted = std::min(bytes, buffer.size());
+    const int read = file.read(buffer.data(), wanted);
+    if (read <= 0) {
+      file.close();
+      return false;
+    }
+    mbedtls_sha256_update(&context, buffer.data(), static_cast<size_t>(read));
+    bytes -= static_cast<size_t>(read);
+  }
+
+  file.close();
+  return true;
 }
 
 class ServerCallbacks final : public NimBLEServerCallbacks {
@@ -413,8 +434,18 @@ void BleTransferActivity::onBleConnected() {
 
 void BleTransferActivity::onBleDisconnected() {
   if (transferOpen_ || downloadOpen_) {
+    const bool keepPartialUpload = transferOpen_ && uploadResumable_;
+    resetTransfer(!keepPartialUpload);
+    if (keepPartialUpload) {
+      helloAccepted_ = false;
+      trustedHelloAccepted_ = false;
+      trustedHostName_.clear();
+      deviceNonce_ = makeNonceHex();
+      setState(State::ADVERTISING);
+      if (ble_) ble_->startAdvertising();
+      return;
+    }
     setError("client disconnected");
-    resetTransfer(true);
     return;
   }
   helloAccepted_ = false;
@@ -506,10 +537,16 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
     fileName_ = doc["name"] | "";
     expectedSize_ = doc["size"] | 0;
     expectedSha256_ = toLowerAscii(doc["sha256"] | "");
+    uploadResumable_ = doc["resume"] | false;
+    uploadChunkSize_ = doc["chunk_size"] | 0;
     transferKind_ = TransferKind::NONE;
 
     if (!isHexSha256(expectedSha256_)) {
       setError("invalid sha256");
+      return;
+    }
+    if (uploadResumable_ && uploadChunkSize_ == 0) {
+      setError("invalid resume chunk size");
       return;
     }
     if (kind == "package") {
@@ -572,16 +609,49 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
       setError("unsupported transfer kind");
       return;
     }
-    if (Storage.exists(partPath_.c_str())) Storage.remove(partPath_.c_str());
-    if (!Storage.openFileForWrite("BLE", partPath_, uploadFile_)) {
-      setError("could not open transfer file");
-      return;
-    }
-
     mbedtls_sha256_starts(&shaContext_, 0);
     shaActive_ = true;
     receivedBytes_ = 0;
     expectedSequence_ = 0;
+    if (uploadResumable_ && Storage.exists(partPath_.c_str())) {
+      FsFile partialFile;
+      if (!Storage.openFileForRead("BLE", partPath_, partialFile)) {
+        setError("could not inspect partial transfer");
+        resetTransfer(true);
+        return;
+      }
+      const size_t partialSize = partialFile.fileSize();
+      partialFile.close();
+      if (partialSize > expectedSize_) {
+        setError("partial transfer too large");
+        resetTransfer(true);
+        return;
+      }
+      if (partialSize > 0 && partialSize < expectedSize_ && (partialSize % uploadChunkSize_) != 0) {
+        setError("partial transfer chunk mismatch");
+        resetTransfer(true);
+        return;
+      }
+      if (!hashExistingPrefix(partPath_, partialSize, shaContext_)) {
+        setError("could not hash partial transfer");
+        resetTransfer(true);
+        return;
+      }
+      uploadFile_ = Storage.open(partPath_.c_str(), O_RDWR);
+      if (!uploadFile_ || !uploadFile_.seek(partialSize)) {
+        setError("could not resume transfer file");
+        resetTransfer(true);
+        return;
+      }
+      receivedBytes_ = partialSize;
+      expectedSequence_ = static_cast<uint32_t>(partialSize / uploadChunkSize_);
+    } else {
+      if (Storage.exists(partPath_.c_str())) Storage.remove(partPath_.c_str());
+      if (!Storage.openFileForWrite("BLE", partPath_, uploadFile_)) {
+        setError("could not open transfer file");
+        return;
+      }
+    }
     transferOpen_ = true;
     removePartOnExit_ = true;
     setState(State::RECEIVING);
@@ -954,6 +1024,7 @@ void BleTransferActivity::resetTransfer(const bool removePart) {
   receivedBytes_ = 0;
   sentBytes_ = 0;
   lastProgressStatusBytes_ = 0;
+  uploadChunkSize_ = 0;
   expectedSequence_ = 0;
   downloadSequence_ = 0;
   pendingDownloadAck_ = 0;
@@ -962,6 +1033,7 @@ void BleTransferActivity::resetTransfer(const bool removePart) {
   downloadAwaitingAck_ = false;
   pendingCommit_ = false;
   removePartOnExit_ = false;
+  uploadResumable_ = false;
 }
 
 void BleTransferActivity::setState(const State state) {
@@ -999,6 +1071,7 @@ std::string BleTransferActivity::buildStatusJson() const {
       doc["sent"] = sentBytes_;
     } else {
       doc["received"] = receivedBytes_;
+      if (uploadResumable_) doc["resumable"] = true;
     }
     doc["size"] = expectedSize_;
   }

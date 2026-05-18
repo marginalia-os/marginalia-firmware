@@ -77,6 +77,7 @@ class BleTransferActivity final : public Activity {
   size_t receivedBytes_ = 0;
   size_t sentBytes_ = 0;
   size_t lastProgressStatusBytes_ = 0;
+  size_t uploadChunkSize_ = 0;
   uint32_t expectedSequence_ = 0;
   uint32_t downloadSequence_ = 0;
   uint32_t pendingDownloadAck_ = 0;
@@ -90,6 +91,7 @@ class BleTransferActivity final : public Activity {
   bool pendingCommit_ = false;
   bool statusDirty_ = true;
   bool removePartOnExit_ = false;
+  bool uploadResumable_ = false;
   bool shaActive_ = false;
   mbedtls_sha256_context shaContext_;
   int promptSelection_ = 0;

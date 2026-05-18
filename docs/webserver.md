@@ -203,6 +203,9 @@ archives are installed through the package inbox; EPUB files are saved to `/Book
 diagnostic downloads are limited to approved read-only files. After a successful code-based upload, the device can save
 the host so later transfers can omit `--code`. General SD-card browsing still uses the web file manager.
 
+If an upload disconnects while the Bluetooth Transfer screen remains open, rerun the same upload command with
+`--resume` to continue from the partial file kept on the device.
+
 ## Security Notes
 
 - The web server runs on port 80 (standard HTTP)
