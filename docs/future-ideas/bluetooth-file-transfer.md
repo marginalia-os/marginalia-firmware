@@ -157,9 +157,9 @@ offset. A richer resumable manifest for downloads and cross-client resume is sti
 
 Useful follow-up PRs, in recommended order:
 
-1. Resumable downloads and manifests.
-   Upload resume now covers interrupted package, EPUB, and BMP writes. Add download resume and richer transfer manifests
-   only if large files or phone clients make interruption recovery necessary.
+1. Richer resumable transfer manifests.
+   Basic `.part`-based resume now covers uploads and the approved diagnostic downloads. Add richer manifests only if
+   large files, cross-client resume, or phone clients make stronger interruption recovery necessary.
 2. BLE OTA.
    Defer until resumability, rollback UX, and stronger authenticity checks are in place. Firmware images are larger and
    failed updates have higher support cost than book/package transfers.

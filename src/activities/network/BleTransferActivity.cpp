@@ -675,7 +675,8 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
 
     const int64_t offsetValue = doc["offset"] | 0;
     const int64_t chunkSizeValue = doc["chunk_size"] | static_cast<int64_t>(BLE_DOWNLOAD_CHUNK_BYTES);
-    if (offsetValue < 0 || offsetValue > static_cast<int64_t>(std::numeric_limits<size_t>::max())) {
+    if (offsetValue < 0 ||
+        static_cast<uint64_t>(offsetValue) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
       setError("invalid download offset");
       return;
     }

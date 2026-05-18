@@ -487,9 +487,20 @@ async def get_ble_download(
         return 2
     output.parent.mkdir(parents=True, exist_ok=True)
     part = output.with_name(output.name + ".part")
-    resume_offset = part.stat().st_size if args.resume and part.exists() else 0
-    if part.exists() and not args.resume:
-        part.unlink()
+    try:
+        resume_offset = part.stat().st_size if args.resume and part.exists() else 0
+        if part.exists() and not args.resume:
+            part.unlink()
+    except OSError as exc:
+        print(f"Failed to prepare partial download file {part}: {exc}", file=sys.stderr)
+        return 2
+    if resume_offset and resume_offset % args.chunk_size != 0:
+        print(
+            f"Existing partial size ({resume_offset}) is not aligned to chunk size ({args.chunk_size}); "
+            "rerun with matching --chunk-size or remove the .part file.",
+            file=sys.stderr,
+        )
+        return 2
     start_payload = dict(start_payload)
     start_payload["offset"] = resume_offset
     start_payload["chunk_size"] = args.chunk_size
