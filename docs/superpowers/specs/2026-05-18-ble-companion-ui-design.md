@@ -74,9 +74,17 @@ The UI should not ask for a code before trying a saved trusted host. Code entry 
 9. Companion waits for `installed` or `saved`.
 10. If the firmware returns a pairing prompt after a code-authenticated upload, companion shows **Save this computer?**.
 
-Safe filename validation must match the firmware rules documented in
-`docs/future-ideas/bluetooth-file-transfer.md`: basename only, no leading `.`, ASCII letters/digits plus `.`, `_`, and
-`-`, extension-specific suffixes, and the firmware filename length limit.
+Safe filename validation must match firmware rules:
+
+- basename only, with no `/` or `\` directory separators
+- non-empty and at most 96 bytes
+- must not start with `.`
+- may contain only ASCII letters, ASCII digits, `.`, `_`, and `-`
+- must satisfy the transfer-specific suffix: `.mpkg.zip`, `.epub`, or `.bmp`
+
+The companion can model the shared safe-name shape as `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`, followed by the
+transfer-specific suffix check. Valid examples: `book.epub`, `cover_01.bmp`, `org.example.pkg.mpkg.zip`. Invalid
+examples: `../book.epub`, `.hidden.bmp`, `cover image.bmp`, `books/story.epub`.
 
 Package uploads should clearly separate "uploaded" from "installed". Book and BMP uploads finish at "saved".
 The **Save this computer?** prompt stays suppressed until firmware reports a final `installed` or `saved` state.
