@@ -33,7 +33,9 @@ DATA_OUT_UUID = "6f9f0a04-9b1d-4d1f-9f53-5b6b8b3d0f10"
 DEVICE_NAME = "Marginalia Transfer"
 PROGRESS_PRINT_BYTES = 4096
 PROGRESS_PRINT_SECONDS = 1.0
-DEFAULT_WINDOW_BYTES = 4096
+DEFAULT_WINDOW_BYTES = 960
+MIN_WINDOW_BYTES = 20
+MAX_WINDOW_BYTES = 65536
 CONFIG_PATH = Path(os.environ.get("MARGINALIA_BLE_CONFIG", "~/.config/marginalia/ble_hosts.json")).expanduser()
 PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,95}$")
 
@@ -318,18 +320,18 @@ async def put_file(
                     print("\nTimed out waiting for device session confirmation.", file=sys.stderr)
                     return 1
 
-                await write_json(
-                    client,
-                    {
-                        "op": "start_put",
-                        "kind": kind,
-                        "name": source.name,
-                        "size": size,
-                        "sha256": digest,
-                        "resume": args.resume,
-                        "chunk_size": args.chunk_size,
-                    },
-                )
+                start_put_payload: dict[str, Any] = {
+                    "op": "start_put",
+                    "kind": kind,
+                    "name": source.name,
+                    "size": size,
+                    "sha256": digest,
+                    "resume": args.resume,
+                    "chunk_size": args.chunk_size,
+                }
+                if args.transfer_mode == "windowed":
+                    start_put_payload["ack_bytes"] = args.window_bytes
+                await write_json(client, start_put_payload)
                 start_status = await wait_for_status({"receiving", "error"}, args.control_timeout)
                 if start_status.get("state") == "error":
                     print(f"\nDevice rejected transfer: {final_status.get('error')}", file=sys.stderr)
@@ -339,6 +341,13 @@ async def put_file(
                     return 1
 
                 transfer_started = True
+                negotiated_ack_bytes = args.window_bytes
+                if args.transfer_mode == "windowed":
+                    ack_bytes = start_status.get("ack_bytes", args.window_bytes)
+                    if not isinstance(ack_bytes, int) or ack_bytes < MIN_WINDOW_BYTES or ack_bytes > MAX_WINDOW_BYTES:
+                        print(f"\nDevice returned invalid ACK window: {ack_bytes}", file=sys.stderr)
+                        return 1
+                    negotiated_ack_bytes = ack_bytes
                 resume_offset = start_status.get("received", 0) if args.resume else 0
                 if not isinstance(resume_offset, int) or resume_offset < 0 or resume_offset > size:
                     print(f"\nDevice returned invalid resume offset: {resume_offset}", file=sys.stderr)
@@ -362,7 +371,7 @@ async def put_file(
                         await client.write_gatt_char(DATA_IN_UUID, frame, response=args.transfer_mode == "response")
                         sequence += 1
                         sent_bytes += len(payload)
-                        if args.transfer_mode == "windowed" and sent_bytes - ack_floor >= args.window_bytes:
+                        if args.transfer_mode == "windowed" and sent_bytes - ack_floor >= negotiated_ack_bytes:
                             ack_floor = sent_bytes
                             if not await wait_for_received(ack_floor, args.control_timeout):
                                 error = final_status.get("error") or f"receiver did not acknowledge {ack_floor} bytes"
@@ -371,10 +380,6 @@ async def put_file(
                         if args.chunk_delay > 0:
                             await asyncio.sleep(args.chunk_delay)
                         if args.debug_stop_after_bytes and sent_bytes >= args.debug_stop_after_bytes and sent_bytes < size:
-                            if not await wait_for_received(sent_bytes, args.control_timeout):
-                                error = final_status.get("error") or f"receiver did not acknowledge {sent_bytes} bytes"
-                                print(f"\nTransfer failed: {error}", file=sys.stderr)
-                                return 1
                             received = final_status.get("received")
                             if isinstance(received, int) and received > 0:
                                 print(f"\nStopped after last reported {received}/{size} bytes for resume testing.", file=sys.stderr)
@@ -753,6 +758,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def window_bytes_arg(value: str) -> int:
+    parsed = positive_int(value)
+    if parsed < MIN_WINDOW_BYTES or parsed > MAX_WINDOW_BYTES:
+        raise argparse.ArgumentTypeError(f"must be between {MIN_WINDOW_BYTES} and {MAX_WINDOW_BYTES}")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -771,7 +783,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="windowed",
         help="BLE write strategy: windowed is faster with receiver ACKs; response is slowest; no-response is unsafe",
     )
-    put.add_argument("--window-bytes", type=positive_int, default=DEFAULT_WINDOW_BYTES, help="Bytes sent before waiting for receiver progress in windowed mode")
+    put.add_argument(
+        "--window-bytes",
+        type=window_bytes_arg,
+        default=DEFAULT_WINDOW_BYTES,
+        help="Bytes sent before waiting for receiver progress in windowed mode",
+    )
     put.add_argument(
         "--write-without-response",
         dest="transfer_mode",
@@ -798,7 +815,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="windowed",
         help="BLE write strategy: windowed is faster with receiver ACKs; response is slowest; no-response is unsafe",
     )
-    put_book_parser.add_argument("--window-bytes", type=positive_int, default=DEFAULT_WINDOW_BYTES, help="Bytes sent before waiting for receiver progress in windowed mode")
+    put_book_parser.add_argument(
+        "--window-bytes",
+        type=window_bytes_arg,
+        default=DEFAULT_WINDOW_BYTES,
+        help="Bytes sent before waiting for receiver progress in windowed mode",
+    )
     put_book_parser.add_argument(
         "--write-without-response",
         dest="transfer_mode",
@@ -825,7 +847,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="windowed",
         help="BLE write strategy: windowed is faster with receiver ACKs; response is slowest; no-response is unsafe",
     )
-    put_bmp_parser.add_argument("--window-bytes", type=positive_int, default=DEFAULT_WINDOW_BYTES, help="Bytes sent before waiting for receiver progress in windowed mode")
+    put_bmp_parser.add_argument(
+        "--window-bytes",
+        type=window_bytes_arg,
+        default=DEFAULT_WINDOW_BYTES,
+        help="Bytes sent before waiting for receiver progress in windowed mode",
+    )
     put_bmp_parser.add_argument(
         "--write-without-response",
         dest="transfer_mode",

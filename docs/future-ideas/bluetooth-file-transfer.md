@@ -54,6 +54,8 @@ Implemented pieces:
 - `.mpkg.zip` package upload and install with `scripts/ble_transfer.py put-package`
 - `.epub` book upload to `/Books/` with `scripts/ble_transfer.py put-book`
 - `.bmp` image upload to `/Pictures/` with `scripts/ble_transfer.py put-bmp`
+- windowed upload flow control where the host negotiates an ACK byte interval and waits for receiver progress before
+  sending the next burst
 - resumable uploads for package, EPUB, and BMP transfers with the host CLI `--resume` option
 - `/crash_report.txt` download with `scripts/ble_transfer.py get-crash-report`
 - package state download with `scripts/ble_transfer.py get-package-state <package-id>`
@@ -78,11 +80,12 @@ Upload flow:
 1. User opens **File Transfer > Bluetooth Transfer**.
 2. Device advertises `Marginalia Transfer` for a limited window and keeps auto-sleep disabled.
 3. Client connects and authenticates with the visible code or trusted-host challenge response.
-4. Client sends `start_put` with destination class, filename, byte size, and SHA-256.
+4. Client sends `start_put` with destination class, filename, byte size, SHA-256, and optional upload ACK interval.
 5. Firmware opens a `.part` file under a staging directory. If the client requests resume and a matching partial file is
    present, firmware hashes the existing prefix and reports the byte offset to continue from.
-6. Client streams numbered chunks to `data-in`.
-7. Firmware acknowledges progress through `status`.
+6. Client streams numbered chunks to `data-in` up to the negotiated window.
+7. Firmware acknowledges receiver progress through `status`; the client waits for that progress before sending the next
+   window.
 8. Client sends `commit`.
 9. Firmware verifies byte count and SHA-256, renames into the final approved path, then offers install if it is an
    `.mpkg.zip`.
@@ -103,8 +106,10 @@ trusted-host nonce, returns to `ADVERTISING`, and restarts BLE advertising while
 open. This keeps the visible code fallback usable after a stale trusted-host record or a mistyped code.
 
 Upload resume is implemented for interrupted package, EPUB, and BMP writes when the client opts in with `--resume`.
-The resume offset is based on the existing `.part` file size and the original chunk size. Downloads are still
-restart-from-zero.
+The resume offset is based on the existing `.part` file size and the original chunk size. Windowed uploads use
+write-without-response plus receiver progress ACKs by default; `--transfer-mode response` remains available for
+conservative debugging, and raw `--transfer-mode no-response` is only for explicit speed experiments. Downloads are
+still restart-from-zero.
 
 ## Approved Destinations
 
@@ -149,18 +154,18 @@ offset. A richer resumable manifest for downloads and cross-client resume is sti
 
 Useful follow-up PRs, in recommended order:
 
-1. Phone or web companion UI.
-   Build a small user-facing client once the Python CLI protocol has stabilized. The UI should use the same code/trusted
-   host model rather than introducing a second pairing concept.
-2. Resumable downloads and manifests.
+1. Resumable downloads and manifests.
    Upload resume now covers interrupted package, EPUB, and BMP writes. Add download resume and richer transfer manifests
    only if large files or phone clients make interruption recovery necessary.
-3. BLE OTA.
+2. BLE OTA.
    Defer until resumability, rollback UX, and stronger authenticity checks are in place. Firmware images are larger and
    failed updates have higher support cost than book/package transfers.
-4. OS BLE bonding or encrypted characteristics.
+3. OS BLE bonding or encrypted characteristics.
    Application-level trust is enough for the current CLI and is easier to test across macOS, Linux, and phones. Bonding
    can be layered on later if the phone UI needs platform-native trust.
+4. Phone or web companion UI.
+   Build a user-facing client only after the Python CLI protocol has the intended Bluetooth feature surface. The UI
+   should use the same code/trusted-host model rather than introducing a second pairing concept.
 
 Still intentionally out of scope:
 
