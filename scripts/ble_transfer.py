@@ -320,7 +320,15 @@ async def put_file(
 
                 await write_json(
                     client,
-                    {"op": "start_put", "kind": kind, "name": source.name, "size": size, "sha256": digest},
+                    {
+                        "op": "start_put",
+                        "kind": kind,
+                        "name": source.name,
+                        "size": size,
+                        "sha256": digest,
+                        "resume": args.resume,
+                        "chunk_size": args.chunk_size,
+                    },
                 )
                 start_status = await wait_for_status({"receiving", "error"}, args.control_timeout)
                 if start_status.get("state") == "error":
@@ -331,10 +339,21 @@ async def put_file(
                     return 1
 
                 transfer_started = True
-                sequence = 0
-                sent_bytes = 0
-                ack_floor = 0
+                resume_offset = start_status.get("received", 0) if args.resume else 0
+                if not isinstance(resume_offset, int) or resume_offset < 0 or resume_offset > size:
+                    print(f"\nDevice returned invalid resume offset: {resume_offset}", file=sys.stderr)
+                    return 1
+                if resume_offset not in (0, size) and resume_offset % args.chunk_size != 0:
+                    print(f"\nDevice returned unaligned resume offset: {resume_offset}", file=sys.stderr)
+                    return 1
+                if resume_offset:
+                    print(f"\nResuming at {resume_offset}/{size} bytes")
+                sequence = resume_offset // args.chunk_size
+                sent_bytes = resume_offset
+                ack_floor = resume_offset
                 with source.open("rb") as handle:
+                    if resume_offset:
+                        handle.seek(resume_offset)
                     while True:
                         payload = handle.read(args.chunk_size)
                         if not payload:
@@ -351,6 +370,14 @@ async def put_file(
                                 return 1
                         if args.chunk_delay > 0:
                             await asyncio.sleep(args.chunk_delay)
+                        if args.debug_stop_after_bytes and sent_bytes >= args.debug_stop_after_bytes and sent_bytes < size:
+                            await wait_for_received(sent_bytes, args.control_timeout)
+                            received = final_status.get("received")
+                            if isinstance(received, int) and received > 0:
+                                print(f"\nStopped after last reported {received}/{size} bytes for resume testing.", file=sys.stderr)
+                            else:
+                                print(f"\nStopped after sending {sent_bytes}/{size} bytes for resume testing.", file=sys.stderr)
+                            return 3
                 if args.transfer_mode == "windowed" and not await wait_for_received(sent_bytes, args.control_timeout):
                     error = final_status.get("error") or f"receiver did not acknowledge {sent_bytes} bytes"
                     print(f"\nTransfer failed: {error}", file=sys.stderr)
@@ -732,6 +759,7 @@ def build_parser() -> argparse.ArgumentParser:
     put.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
     put.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     put.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
+    put.add_argument("--resume", action="store_true", help="Resume a matching interrupted upload if the device kept a partial file")
     put.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
     put.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put.add_argument(
@@ -751,12 +779,14 @@ def build_parser() -> argparse.ArgumentParser:
     put.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
     put.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     put.add_argument("--install-timeout", type=float, default=60.0, help="Install result timeout, in seconds")
+    put.add_argument("--debug-stop-after-bytes", type=positive_int, default=0, help=argparse.SUPPRESS)
 
     put_book_parser = sub.add_parser("put-book", help="Upload an .epub book")
     put_book_parser.add_argument("book", help="Path to the .epub book")
     put_book_parser.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
     put_book_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     put_book_parser.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
+    put_book_parser.add_argument("--resume", action="store_true", help="Resume a matching interrupted upload if the device kept a partial file")
     put_book_parser.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
     put_book_parser.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put_book_parser.add_argument(
@@ -776,12 +806,14 @@ def build_parser() -> argparse.ArgumentParser:
     put_book_parser.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
     put_book_parser.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     put_book_parser.add_argument("--save-timeout", type=float, default=60.0, help="Save result timeout, in seconds")
+    put_book_parser.add_argument("--debug-stop-after-bytes", type=positive_int, default=0, help=argparse.SUPPRESS)
 
     put_bmp_parser = sub.add_parser("put-bmp", help="Upload a .bmp image")
     put_bmp_parser.add_argument("image", help="Path to the .bmp image")
     put_bmp_parser.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
     put_bmp_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     put_bmp_parser.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
+    put_bmp_parser.add_argument("--resume", action="store_true", help="Resume a matching interrupted upload if the device kept a partial file")
     put_bmp_parser.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
     put_bmp_parser.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put_bmp_parser.add_argument(
@@ -801,6 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
     put_bmp_parser.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
     put_bmp_parser.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     put_bmp_parser.add_argument("--save-timeout", type=float, default=60.0, help="Save result timeout, in seconds")
+    put_bmp_parser.add_argument("--debug-stop-after-bytes", type=positive_int, default=0, help=argparse.SUPPRESS)
 
     get_crash = sub.add_parser("get-crash-report", help="Download /crash_report.txt")
     get_crash.add_argument("output", nargs="?", default="crash_report.txt", help="Output path")
