@@ -564,6 +564,19 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                     return 1
 
                 handle = part.open("wb")
+                pending_ack_tasks: list[asyncio.Task[Any]] = []
+
+                async def collect_ack_errors() -> None:
+                    nonlocal data_error
+                    if not pending_ack_tasks:
+                        return
+                    results = await asyncio.gather(*pending_ack_tasks, return_exceptions=True)
+                    pending_ack_tasks.clear()
+                    for result in results:
+                        if isinstance(result, Exception) and data_error is None:
+                            data_error = f"failed to send download ACK: {result}"
+                            done.set()
+                            return
 
                 def on_data(_: Any, data: bytearray) -> None:
                     nonlocal received_bytes, expected_sequence, data_error
@@ -581,7 +594,8 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                     handle.write(payload)
                     received_bytes += len(payload)
                     expected_sequence += 1
-                    asyncio.create_task(write_json(client, {"op": "get_ack", "sequence": sequence}))
+                    task = asyncio.create_task(write_json(client, {"op": "get_ack", "sequence": sequence}))
+                    pending_ack_tasks.append(task)
 
                 await client.start_notify(DATA_OUT_UUID, on_data)
                 data_notify_started = True
@@ -597,10 +611,15 @@ async def get_crash_report(args: argparse.Namespace) -> int:
 
                 try:
                     await asyncio.wait_for(done.wait(), timeout=args.download_timeout)
+                    await collect_ack_errors()
                 except asyncio.TimeoutError:
+                    for task in pending_ack_tasks:
+                        task.cancel()
+                    await collect_ack_errors()
                     print("\nTimed out waiting for crash report.", file=sys.stderr)
                     return 1
             finally:
+                await collect_ack_errors()
                 if handle:
                     handle.close()
                 if data_notify_started:

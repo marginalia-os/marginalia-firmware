@@ -38,7 +38,9 @@ class BleTransferActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
-  bool skipLoopDelay() override { return state_ == State::VERIFYING || state_ == State::INSTALLING || state_ == State::SENDING; }
+  bool skipLoopDelay() override {
+    return state_ == State::VERIFYING || state_ == State::INSTALLING || state_ == State::SENDING;
+  }
 
   void onBleConnected();
   void onBleDisconnected();

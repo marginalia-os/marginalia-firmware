@@ -374,6 +374,7 @@ void BleTransferActivity::loop() {
   }
 
   if (state_ == State::SENDING && downloadOpen_) {
+    if (statusDirty_) publishStatus();
     pumpDownload();
     return;
   }
