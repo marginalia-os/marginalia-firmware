@@ -212,6 +212,21 @@ async def put_file(
                 pass
         return final_status
 
+    async def wait_for_trusted_auth(timeout: float) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if final_status.get("state") == "error":
+                return final_status
+            if final_status.get("state") == "connected" and final_status.get("trusted_host"):
+                return final_status
+            status_event.clear()
+            remaining = deadline - asyncio.get_running_loop().time()
+            try:
+                await asyncio.wait_for(status_event.wait(), timeout=min(0.25, max(0.0, remaining)))
+            except asyncio.TimeoutError:
+                pass
+        return final_status
+
     async def wait_for_received(min_received: int, timeout: float) -> bool:
         deadline = asyncio.get_running_loop().time() + timeout
         while asyncio.get_running_loop().time() < deadline:
@@ -260,6 +275,7 @@ async def put_file(
                 ):
                     response = trusted_response(str(trusted.get("secret", "")), device_nonce, str(trusted.get("host_id", host_id)))
                     final_status = {}
+                    status_event.clear()
                     await write_json(
                         client,
                         {
@@ -269,7 +285,7 @@ async def put_file(
                             "response": response,
                         },
                     )
-                    hello_status = await wait_for_status({"connected", "error"}, args.control_timeout)
+                    hello_status = await wait_for_trusted_auth(args.control_timeout)
                     used_trusted_auth = hello_status.get("state") == "connected" and hello_status.get("trusted_host")
                     if not used_trusted_auth:
                         print("\nTrusted-host auth failed; falling back to code.", file=sys.stderr)
@@ -279,6 +295,7 @@ async def put_file(
                         print("\nNo trusted host was accepted; pass --code with the six-digit device code.", file=sys.stderr)
                         return 1
                     final_status = {}
+                    status_event.clear()
                     hello_payload: dict[str, Any] = {"op": "hello", "version": 1, "code": args.code}
                     if not args.no_remember_host and isinstance(device_id, str):
                         pending_pair_device = device_id
@@ -467,6 +484,21 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                 pass
         return final_status
 
+    async def wait_for_trusted_auth(timeout: float) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if final_status.get("state") == "error":
+                return final_status
+            if final_status.get("state") == "connected" and final_status.get("trusted_host"):
+                return final_status
+            status_event.clear()
+            remaining = deadline - asyncio.get_running_loop().time()
+            try:
+                await asyncio.wait_for(status_event.wait(), timeout=min(0.25, max(0.0, remaining)))
+            except asyncio.TimeoutError:
+                pass
+        return final_status
+
     try:
         device = await find_device(args.scan_timeout)
     except (BleakError, OSError) as exc:
@@ -481,6 +513,7 @@ async def get_crash_report(args: argparse.Namespace) -> int:
         async with BleakClient(device) as client:
             await client.start_notify(STATUS_UUID, on_status)
             handle = None
+            data_notify_started = False
             try:
                 try:
                     on_status(None, await client.read_gatt_char(STATUS_UUID))
@@ -499,6 +532,7 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                 ):
                     response = trusted_response(str(trusted.get("secret", "")), device_nonce, str(trusted.get("host_id", host_id)))
                     final_status = {}
+                    status_event.clear()
                     await write_json(
                         client,
                         {
@@ -508,7 +542,7 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                             "response": response,
                         },
                     )
-                    hello_status = await wait_for_status({"connected", "error"}, args.control_timeout)
+                    hello_status = await wait_for_trusted_auth(args.control_timeout)
                     used_trusted_auth = hello_status.get("state") == "connected" and hello_status.get("trusted_host")
                     if not used_trusted_auth:
                         print("\nTrusted-host auth failed; falling back to code.", file=sys.stderr)
@@ -518,6 +552,7 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                         print("\nNo trusted host was accepted; pass --code with the six-digit device code.", file=sys.stderr)
                         return 1
                     final_status = {}
+                    status_event.clear()
                     await write_json(client, {"op": "hello", "version": 1, "code": args.code})
 
                 hello_status = await wait_for_status({"connected", "error"}, args.control_timeout)
@@ -549,6 +584,7 @@ async def get_crash_report(args: argparse.Namespace) -> int:
                     asyncio.create_task(write_json(client, {"op": "get_ack", "sequence": sequence}))
 
                 await client.start_notify(DATA_OUT_UUID, on_data)
+                data_notify_started = True
                 download_started = True
                 await write_json(client, {"op": "start_get", "kind": "crash_report"})
                 start_status = await wait_for_status({"sending", "sent", "error"}, args.control_timeout)
@@ -567,10 +603,11 @@ async def get_crash_report(args: argparse.Namespace) -> int:
             finally:
                 if handle:
                     handle.close()
-                try:
-                    await client.stop_notify(DATA_OUT_UUID)
-                except (BleakError, OSError):
-                    pass
+                if data_notify_started:
+                    try:
+                        await client.stop_notify(DATA_OUT_UUID)
+                    except (BleakError, OSError):
+                        pass
                 try:
                     await client.stop_notify(STATUS_UUID)
                 except (BleakError, OSError) as exc:
