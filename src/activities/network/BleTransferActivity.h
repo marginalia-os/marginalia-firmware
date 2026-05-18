@@ -79,6 +79,7 @@ class BleTransferActivity final : public Activity {
   size_t lastProgressStatusBytes_ = 0;
   size_t uploadChunkSize_ = 0;
   size_t uploadAckBytes_ = 0;
+  size_t downloadChunkSize_ = 0;
   uint32_t expectedSequence_ = 0;
   uint32_t downloadSequence_ = 0;
   uint32_t pendingDownloadAck_ = 0;
@@ -98,8 +99,8 @@ class BleTransferActivity final : public Activity {
   int promptSelection_ = 0;
 
   void processCommit();
-  void startCrashReportDownload();
-  void startPackageStateDownload(const std::string& packageId);
+  void startCrashReportDownload(size_t offset, size_t chunkSize);
+  void startPackageStateDownload(const std::string& packageId, size_t offset, size_t chunkSize);
   void pumpDownload();
   void resetTransfer(bool removePart);
   void setState(State state);

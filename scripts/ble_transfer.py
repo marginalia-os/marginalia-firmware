@@ -36,6 +36,9 @@ PROGRESS_PRINT_SECONDS = 1.0
 DEFAULT_WINDOW_BYTES = 960
 MIN_WINDOW_BYTES = 20
 MAX_WINDOW_BYTES = 65536
+DEFAULT_DOWNLOAD_CHUNK_BYTES = 160
+MIN_DOWNLOAD_CHUNK_BYTES = 20
+MAX_DOWNLOAD_CHUNK_BYTES = 160
 CONFIG_PATH = Path(os.environ.get("MARGINALIA_BLE_CONFIG", "~/.config/marginalia/ble_hosts.json")).expanduser()
 PACKAGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,95}$")
 
@@ -484,21 +487,40 @@ async def get_ble_download(
         return 2
     output.parent.mkdir(parents=True, exist_ok=True)
     part = output.with_name(output.name + ".part")
-    if part.exists():
-        part.unlink()
+    try:
+        resume_offset = part.stat().st_size if args.resume and part.exists() else 0
+        if part.exists() and not args.resume:
+            part.unlink()
+    except OSError as exc:
+        print(f"Failed to prepare partial download file {part}: {exc}", file=sys.stderr)
+        return 2
+    if resume_offset and resume_offset % args.chunk_size != 0:
+        print(
+            f"Existing partial size ({resume_offset}) is not aligned to chunk size ({args.chunk_size}); "
+            "rerun with matching --chunk-size or remove the .part file.",
+            file=sys.stderr,
+        )
+        return 2
+    start_payload = dict(start_payload)
+    start_payload["offset"] = resume_offset
+    start_payload["chunk_size"] = args.chunk_size
 
     final_status: dict[str, Any] = {}
     status_event = asyncio.Event()
     done = asyncio.Event()
     download_started = False
-    received_bytes = 0
-    expected_sequence = 0
+    received_bytes = resume_offset
+    expected_sequence = resume_offset // args.chunk_size
     data_error: str | None = None
     config = load_ble_config()
     host_id, _ = get_host_identity(config)
     last_print_sent = -PROGRESS_PRINT_BYTES
     last_print_time = 0.0
     pending_ack_tasks: list[asyncio.Task[Any]] = []
+
+    def remove_part_unless_resuming() -> None:
+        if part.exists() and not args.resume:
+            part.unlink()
 
     def on_status(_: Any, data: bytearray) -> None:
         nonlocal final_status, last_print_sent, last_print_time
@@ -629,7 +651,7 @@ async def get_ble_download(
                     print("\nTimed out waiting for device session confirmation.", file=sys.stderr)
                     return 1
 
-                handle = part.open("wb")
+                handle = part.open("ab" if resume_offset else "wb")
 
                 def on_data(_: Any, data: bytearray) -> None:
                     nonlocal received_bytes, expected_sequence, data_error
@@ -661,9 +683,11 @@ async def get_ble_download(
                 await write_json(client, start_payload)
                 start_status = await wait_for_status({"sending", "sent", "error"}, args.control_timeout)
                 if start_status.get("state") == "error":
+                    remove_part_unless_resuming()
                     print(f"\nDevice rejected download: {final_status.get('error')}", file=sys.stderr)
                     return 1
                 if start_status.get("state") not in {"sending", "sent"}:
+                    remove_part_unless_resuming()
                     print("\nTimed out waiting for device download start.", file=sys.stderr)
                     return 1
 
@@ -674,6 +698,7 @@ async def get_ble_download(
                     for task in pending_ack_tasks:
                         task.cancel()
                     await collect_ack_errors()
+                    remove_part_unless_resuming()
                     print(f"\nTimed out waiting for {timeout_label}.", file=sys.stderr)
                     return 1
             finally:
@@ -690,29 +715,26 @@ async def get_ble_download(
                 except (BleakError, OSError) as exc:
                     print(f"\nWarning: failed to stop BLE notifications: {exc}", file=sys.stderr)
     except (BleakError, OSError) as exc:
+        remove_part_unless_resuming()
         print(f"\nBLE transfer failed: {exc}", file=sys.stderr)
         return 1
 
     print()
     if data_error:
-        if part.exists():
-            part.unlink()
+        remove_part_unless_resuming()
         print(f"Download failed: {data_error}", file=sys.stderr)
         return 1
     if final_status.get("state") == "error":
-        if part.exists():
-            part.unlink()
+        remove_part_unless_resuming()
         print(f"Download failed: {final_status.get('error')}", file=sys.stderr)
         return 1
     if final_status.get("state") != "sent":
-        if part.exists():
-            part.unlink()
+        remove_part_unless_resuming()
         print(f"Download failed: {final_status}", file=sys.stderr)
         return 1
     expected_size = final_status.get("size")
     if not isinstance(expected_size, int) or received_bytes != expected_size:
-        if part.exists():
-            part.unlink()
+        remove_part_unless_resuming()
         print(f"Download failed: received {received_bytes} bytes, expected {expected_size}", file=sys.stderr)
         return 1
     part.replace(output)
@@ -755,6 +777,15 @@ def positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be an integer") from exc
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
+def download_chunk_size_arg(value: str) -> int:
+    parsed = positive_int(value)
+    if parsed < MIN_DOWNLOAD_CHUNK_BYTES or parsed > MAX_DOWNLOAD_CHUNK_BYTES:
+        raise argparse.ArgumentTypeError(
+            f"must be between {MIN_DOWNLOAD_CHUNK_BYTES} and {MAX_DOWNLOAD_CHUNK_BYTES}"
+        )
     return parsed
 
 
@@ -870,6 +901,13 @@ def build_parser() -> argparse.ArgumentParser:
     get_crash.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
     get_crash.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     get_crash.add_argument("--force", action="store_true", help="Overwrite output path if it already exists")
+    get_crash.add_argument("--resume", action="store_true", help="Resume from an existing <output>.part file")
+    get_crash.add_argument(
+        "--chunk-size",
+        type=download_chunk_size_arg,
+        default=DEFAULT_DOWNLOAD_CHUNK_BYTES,
+        help="Payload bytes per BLE data-out frame",
+    )
     get_crash.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
     get_crash.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     get_crash.add_argument("--download-timeout", type=float, default=60.0, help="Download timeout, in seconds")
@@ -883,6 +921,13 @@ def build_parser() -> argparse.ArgumentParser:
     get_package_state_parser.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
     get_package_state_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     get_package_state_parser.add_argument("--force", action="store_true", help="Overwrite output path if it already exists")
+    get_package_state_parser.add_argument("--resume", action="store_true", help="Resume from an existing <output>.part file")
+    get_package_state_parser.add_argument(
+        "--chunk-size",
+        type=download_chunk_size_arg,
+        default=DEFAULT_DOWNLOAD_CHUNK_BYTES,
+        help="Payload bytes per BLE data-out frame",
+    )
     get_package_state_parser.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
     get_package_state_parser.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     get_package_state_parser.add_argument("--download-timeout", type=float, default=60.0, help="Download timeout, in seconds")

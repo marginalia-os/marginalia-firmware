@@ -207,6 +207,10 @@ uses the web file manager.
 If an upload disconnects while the Bluetooth Transfer screen remains open, rerun the same upload command with
 `--resume` to continue from the partial file kept on the device.
 
+If a diagnostic download disconnects, rerun the same `get-crash-report` or `get-package-state` command with `--resume`.
+The CLI keeps `<output>.part`, asks firmware to seek to that byte offset, appends the remaining frames, and replaces
+the final output only after the downloaded byte count matches the firmware-reported file size.
+
 ## Security Notes
 
 - The web server runs on port 80 (standard HTTP)
