@@ -6,6 +6,7 @@
 #include <Logging.h>
 #include <NimBLEDevice.h>
 #include <esp_mac.h>
+#include <esp_ota_ops.h>
 #include <esp_random.h>
 #include <mbedtls/md.h>
 
@@ -23,6 +24,7 @@
 #include "fontIds.h"
 #include "marginalia/PackageArchiveInstaller.h"
 #include "marginalia/PackageStore.h"
+#include "network/FirmwareFlasher.h"
 
 namespace {
 
@@ -34,8 +36,12 @@ constexpr const char* BLE_STATUS_UUID = "6f9f0a03-9b1d-4d1f-9f53-5b6b8b3d0f10";
 constexpr const char* BLE_DATA_OUT_UUID = "6f9f0a04-9b1d-4d1f-9f53-5b6b8b3d0f10";
 constexpr const char* BOOKS_ROOT = "/Books";
 constexpr const char* PICTURES_ROOT = "/Pictures";
+constexpr const char* BLE_OTA_ROOT = "/.marginalia/ota";
+constexpr const char* BLE_OTA_PART_PATH = "/.marginalia/ota/firmware.bin.part";
+constexpr const char* BLE_OTA_FINAL_PATH = "/.marginalia/ota/firmware.bin";
 constexpr const char* CRASH_REPORT_PATH = "/crash_report.txt";
 constexpr const char* CRASH_REPORT_NAME = "crash_report.txt";
+constexpr size_t MIN_BLE_FIRMWARE_BYTES = 64UL * 1024UL;
 constexpr size_t MAX_BLE_PACKAGE_BYTES = 4UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BOOK_BYTES = 32UL * 1024UL * 1024UL;
 constexpr size_t MAX_BLE_BMP_BYTES = 8UL * 1024UL * 1024UL;
@@ -49,11 +55,14 @@ constexpr size_t BLE_HOST_NAME_MAX_BYTES = 48;
 constexpr size_t BLE_SHARED_SECRET_HEX_BYTES = 64;
 constexpr size_t BLE_NONCE_BYTES = 16;
 constexpr size_t BLE_PROGRESS_STATUS_INTERVAL_BYTES = 4UL * 1024UL;
+constexpr size_t BLE_PROGRESS_DISPLAY_INTERVAL_BYTES = 128UL * 1024UL;
+constexpr size_t BLE_FIRMWARE_PROGRESS_DISPLAY_INTERVAL_BYTES = 1024UL * 1024UL;
 constexpr size_t BLE_UPLOAD_ACK_BYTES_MIN = 20;
 constexpr size_t BLE_UPLOAD_ACK_BYTES_MAX = 64UL * 1024UL;
 constexpr size_t MPKG_SUFFIX_LEN = 9;
 constexpr size_t EPUB_SUFFIX_LEN = 5;
 constexpr size_t BMP_SUFFIX_LEN = 4;
+constexpr size_t BIN_SUFFIX_LEN = 4;
 
 std::string makeSessionCode() {
   char buffer[7];
@@ -118,6 +127,12 @@ bool endsWithBmp(const std::string& value) {
   return toLowerAscii(value.substr(value.length() - BMP_SUFFIX_LEN)) == suffix;
 }
 
+bool endsWithBin(const std::string& value) {
+  constexpr const char* suffix = ".bin";
+  if (value.length() < BIN_SUFFIX_LEN) return false;
+  return toLowerAscii(value.substr(value.length() - BIN_SUFFIX_LEN)) == suffix;
+}
+
 bool isSafeBleFileName(const std::string& value) {
   if (value.empty() || value.length() > MAX_FILENAME_BYTES || value[0] == '.') return false;
   for (const char c : value) {
@@ -152,6 +167,8 @@ bool isSafeBleBookName(const std::string& value) { return isSafeBleFileName(valu
 
 bool isSafeBleBmpName(const std::string& value) { return isSafeBleFileName(value) && endsWithBmp(value); }
 
+bool isSafeBleFirmwareName(const std::string& value) { return isSafeBleFileName(value) && endsWithBin(value); }
+
 std::string transferKindName(const BleTransferActivity::TransferKind kind) {
   switch (kind) {
     case BleTransferActivity::TransferKind::PACKAGE:
@@ -160,6 +177,8 @@ std::string transferKindName(const BleTransferActivity::TransferKind kind) {
       return "book";
     case BleTransferActivity::TransferKind::BMP:
       return "bmp";
+    case BleTransferActivity::TransferKind::FIRMWARE:
+      return "firmware";
     case BleTransferActivity::TransferKind::CRASH_REPORT:
       return "crash_report";
     case BleTransferActivity::TransferKind::PACKAGE_STATE:
@@ -204,6 +223,12 @@ std::string stateName(BleTransferActivity::State state) {
       return "installed";
     case BleTransferActivity::State::SAVED:
       return "saved";
+    case BleTransferActivity::State::FIRMWARE_CONFIRM:
+      return "confirming";
+    case BleTransferActivity::State::UPDATING:
+      return "updating";
+    case BleTransferActivity::State::RESTARTING:
+      return "restarting";
     case BleTransferActivity::State::SENDING:
       return "sending";
     case BleTransferActivity::State::SENT:
@@ -392,6 +417,11 @@ void BleTransferActivity::onExit() {
 }
 
 void BleTransferActivity::loop() {
+  if (state_ == State::FIRMWARE_CONFIRM) {
+    handleFirmwareConfirm();
+    return;
+  }
+
   if (state_ == State::SAVE_HOST_PROMPT) {
     handleSaveHostPrompt();
     return;
@@ -616,6 +646,27 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
         setError("exists");
         return;
       }
+    } else if (kind == "firmware") {
+      if (!isSafeBleFirmwareName(fileName_)) {
+        setError("unsafe firmware filename");
+        return;
+      }
+      const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
+      if (!dest) {
+        setError("no update partition");
+        return;
+      }
+      if (expectedSize_ < MIN_BLE_FIRMWARE_BYTES || expectedSize_ > dest->size) {
+        setError("invalid firmware size");
+        return;
+      }
+      if (!Storage.ensureDirectoryExists(BLE_OTA_ROOT)) {
+        setError("could not create ota directory");
+        return;
+      }
+      transferKind_ = TransferKind::FIRMWARE;
+      partPath_ = BLE_OTA_PART_PATH;
+      finalPath_ = BLE_OTA_FINAL_PATH;
     } else {
       setError("unsupported transfer kind");
       return;
@@ -666,6 +717,7 @@ void BleTransferActivity::onControlWrite(const std::string& value) {
     transferOpen_ = true;
     removePartOnExit_ = true;
     lastProgressStatusBytes_ = receivedBytes_;
+    lastDisplayProgressBytes_ = receivedBytes_;
     setState(State::RECEIVING);
     return;
   }
@@ -771,6 +823,11 @@ void BleTransferActivity::onDataWrite(const std::string& value) {
   if (receivedBytes_ == expectedSize_ || receivedBytes_ - lastProgressStatusBytes_ >= uploadAckBytes_) {
     lastProgressStatusBytes_ = receivedBytes_;
     statusDirty_ = true;
+  }
+  const size_t displayInterval = transferKind_ == TransferKind::FIRMWARE ? BLE_FIRMWARE_PROGRESS_DISPLAY_INTERVAL_BYTES
+                                                                         : BLE_PROGRESS_DISPLAY_INTERVAL_BYTES;
+  if (receivedBytes_ == expectedSize_ || receivedBytes_ - lastDisplayProgressBytes_ >= displayInterval) {
+    lastDisplayProgressBytes_ = receivedBytes_;
     requestUpdate();
   }
 }
@@ -805,9 +862,10 @@ void BleTransferActivity::processCommit() {
     resetTransfer(true);
     return;
   }
-  if (transferKind_ == TransferKind::PACKAGE) {
+  if (transferKind_ == TransferKind::PACKAGE || transferKind_ == TransferKind::FIRMWARE) {
     if (Storage.exists(finalPath_.c_str()) && !Storage.remove(finalPath_.c_str())) {
-      setError("could not replace existing package");
+      setError(transferKind_ == TransferKind::FIRMWARE ? "could not replace existing firmware"
+                                                       : "could not replace existing package");
       resetTransfer(true);
       return;
     }
@@ -822,6 +880,27 @@ void BleTransferActivity::processCommit() {
   if (transferKind_ == TransferKind::BOOK || transferKind_ == TransferKind::BMP) {
     savedPath_ = finalPath_;
     completeFinalState(State::SAVED);
+    return;
+  }
+
+  if (transferKind_ == TransferKind::FIRMWARE) {
+    const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
+    if (!dest) {
+      setError("no update partition");
+      return;
+    }
+    LOG_INF("BLE", "validating staged firmware: %s (%u bytes)", finalPath_.c_str(),
+            static_cast<unsigned>(expectedSize_));
+    const firmware_flash::Result validateRes = firmware_flash::validateImageFile(finalPath_.c_str(), dest->size);
+    if (validateRes != firmware_flash::Result::OK) {
+      setError(std::string("invalid firmware: ") + firmware_flash::resultName(validateRes));
+      return;
+    }
+    LOG_INF("BLE", "staged firmware validated; waiting for device confirmation");
+    flashWrittenBytes_ = 0;
+    promptSelection_ = 0;
+    setState(State::FIRMWARE_CONFIRM);
+    requestUpdateAndWait();
     return;
   }
 
@@ -994,6 +1073,62 @@ void BleTransferActivity::completeFinalState(const State finalState) {
   setState(finalState);
 }
 
+void BleTransferActivity::handleFirmwareConfirm() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
+      mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+    if (promptSelection_ > 0) {
+      promptSelection_--;
+      requestUpdate();
+    }
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) ||
+             mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+    if (promptSelection_ < 1) {
+      promptSelection_++;
+      requestUpdate();
+    }
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (promptSelection_ != 0) {
+      setError("firmware update rejected");
+      return;
+    }
+
+    flashWrittenBytes_ = 0;
+    lastFirmwareFlashRenderedPercent_ = 101;
+    setState(State::UPDATING);
+    publishStatus();
+    requestUpdateAndWait();
+    LOG_INF("BLE", "flashing staged firmware: %s", finalPath_.c_str());
+    const auto progressCb = +[](const size_t written, const size_t total, void* ctx) {
+      auto* self = static_cast<BleTransferActivity*>(ctx);
+      self->flashWrittenBytes_ = written;
+      self->expectedSize_ = total;
+      self->statusDirty_ = true;
+      self->publishStatus();
+      const unsigned int pct = total > 0 ? static_cast<unsigned int>((written * 100) / total) : 0;
+      if (pct != self->lastFirmwareFlashRenderedPercent_) {
+        self->lastFirmwareFlashRenderedPercent_ = pct;
+        self->renderFirmwareUpdating();
+      }
+    };
+    firmware_flash::Result flashRes = firmware_flash::Result::READ_FAIL;
+    {
+      RenderLock lock(*this);
+      flashRes = firmware_flash::flashFromSdPath(finalPath_.c_str(), progressCb, this, /*alreadyValidated=*/true);
+    }
+    if (flashRes != firmware_flash::Result::OK) {
+      setError(std::string("firmware update failed: ") + firmware_flash::resultName(flashRes));
+      return;
+    }
+    flashWrittenBytes_ = expectedSize_;
+    setState(State::RESTARTING);
+    publishStatus();
+    delay(750);
+    ESP.restart();
+  } else if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    setError("firmware update rejected");
+  }
+}
+
 void BleTransferActivity::handleSaveHostPrompt() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
       mappedInput.wasPressed(MappedInputManager::Button::Left)) {
@@ -1084,7 +1219,9 @@ void BleTransferActivity::resetTransfer(const bool removePart) {
   expectedSize_ = 0;
   receivedBytes_ = 0;
   sentBytes_ = 0;
+  flashWrittenBytes_ = 0;
   lastProgressStatusBytes_ = 0;
+  lastDisplayProgressBytes_ = 0;
   uploadChunkSize_ = 0;
   uploadAckBytes_ = BLE_PROGRESS_STATUS_INTERVAL_BYTES;
   downloadChunkSize_ = BLE_DOWNLOAD_CHUNK_BYTES;
@@ -1132,6 +1269,8 @@ std::string BleTransferActivity::buildStatusJson() const {
     if (!kind.empty()) doc["kind"] = kind.c_str();
     if (state_ == State::SENDING || state_ == State::SENT) {
       doc["sent"] = sentBytes_;
+    } else if (state_ == State::UPDATING || state_ == State::RESTARTING) {
+      doc["written"] = flashWrittenBytes_;
     } else {
       doc["received"] = receivedBytes_;
       if (uploadResumable_) doc["resumable"] = true;
@@ -1156,6 +1295,26 @@ std::string BleTransferActivity::buildStatusJson() const {
 }
 
 void BleTransferActivity::render(RenderLock&&) {
+  if (state_ == State::FIRMWARE_CONFIRM) {
+    renderFirmwareConfirm();
+    return;
+  }
+
+  if (state_ == State::UPDATING) {
+    renderFirmwareUpdating();
+    return;
+  }
+
+  if (state_ == State::SAVE_HOST_PROMPT) {
+    renderSaveHostPrompt();
+    return;
+  }
+
+  if (state_ == State::FORGET_HOST_PROMPT) {
+    renderForgetHostPrompt();
+    return;
+  }
+
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -1203,6 +1362,15 @@ void BleTransferActivity::render(RenderLock&&) {
       primary = tr(STR_BLE_TRANSFER_SAVED);
       secondary = savedPath_.empty() ? fileName_ : savedPath_;
       break;
+    case State::FIRMWARE_CONFIRM:
+    case State::UPDATING:
+    case State::SAVE_HOST_PROMPT:
+    case State::FORGET_HOST_PROMPT:
+      return;
+    case State::RESTARTING:
+      primary = "Restarting";
+      secondary = "Firmware updated";
+      break;
     case State::SENDING: {
       primary = "Sending diagnostic";
       char buffer[48];
@@ -1215,12 +1383,6 @@ void BleTransferActivity::render(RenderLock&&) {
       primary = "Diagnostic sent";
       secondary = fileName_;
       break;
-    case State::SAVE_HOST_PROMPT:
-      renderSaveHostPrompt();
-      return;
-    case State::FORGET_HOST_PROMPT:
-      renderForgetHostPrompt();
-      return;
     case State::ERROR:
       primary = tr(STR_ERROR_MSG);
       secondary = errorMessage_;
@@ -1240,12 +1402,83 @@ void BleTransferActivity::render(RenderLock&&) {
   renderer.displayBuffer();
 }
 
-void BleTransferActivity::renderSaveHostPrompt() const {
+void BleTransferActivity::renderFirmwareConfirm() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   const auto height = renderer.getLineHeight(UI_10_FONT_ID);
   const auto top = (pageHeight - height * 3) / 2;
 
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BLUETOOTH_TRANSFER));
+
+  renderer.drawCenteredText(UI_12_FONT_ID, top - 40, "Update firmware?", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, top, fileName_.empty() ? "firmware.bin" : fileName_.c_str());
+  renderer.drawCenteredText(UI_10_FONT_ID, top + 40, "Device will restart after flashing");
+
+  const int buttonY = top + 80;
+  constexpr int buttonWidth = 80;
+  constexpr int buttonSpacing = 30;
+  constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
+  const int startX = (pageWidth - totalWidth) / 2;
+
+  if (promptSelection_ == 0) {
+    const std::string text = "[" + std::string(tr(STR_YES)) + "]";
+    renderer.drawText(UI_10_FONT_ID, startX, buttonY, text.c_str());
+  } else {
+    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, tr(STR_YES));
+  }
+
+  if (promptSelection_ == 1) {
+    const std::string text = "[" + std::string(tr(STR_NO)) + "]";
+    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, text.c_str());
+  } else {
+    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, tr(STR_NO));
+  }
+
+  const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
+}
+
+void BleTransferActivity::renderFirmwareUpdating() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BLUETOOTH_TRANSFER));
+
+  const int centerY = pageHeight / 2 - 54;
+  renderer.drawCenteredText(UI_12_FONT_ID, centerY, "Writing firmware", true, EpdFontFamily::BOLD);
+
+  const int percent = expectedSize_ > 0 ? static_cast<int>((flashWrittenBytes_ * 100) / expectedSize_) : 0;
+  GUI.drawProgressBar(renderer,
+                      Rect{metrics.contentSidePadding, centerY + 36, pageWidth - metrics.contentSidePadding * 2,
+                           metrics.progressBarHeight},
+                      percent, 100);
+
+  const auto writtenTenthsMb = static_cast<unsigned>((static_cast<uint64_t>(flashWrittenBytes_) * 10) / (1024 * 1024));
+  const auto totalTenthsMb = static_cast<unsigned>((static_cast<uint64_t>(expectedSize_) * 10) / (1024 * 1024));
+  char progress[32];
+  snprintf(progress, sizeof(progress), "%u.%u / %u.%u MB", writtenTenthsMb / 10, writtenTenthsMb % 10,
+           totalTenthsMb / 10, totalTenthsMb % 10);
+  renderer.drawCenteredText(UI_10_FONT_ID, centerY + 92, progress);
+  renderer.drawCenteredText(UI_10_FONT_ID, centerY + 122, "This can take about a minute");
+  renderer.drawCenteredText(UI_10_FONT_ID, centerY + 150, "Do not power off");
+
+  renderer.displayBuffer();
+}
+
+void BleTransferActivity::renderSaveHostPrompt() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
+  const auto top = (pageHeight - height * 3) / 2;
+
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BLUETOOTH_TRANSFER));
   renderer.drawCenteredText(UI_12_FONT_ID, top - 40, tr(STR_BLE_SAVE_HOST), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, top,
                             candidateHostName_.empty() ? "Trusted host" : candidateHostName_.c_str());
@@ -1277,11 +1510,14 @@ void BleTransferActivity::renderSaveHostPrompt() const {
 }
 
 void BleTransferActivity::renderForgetHostPrompt() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   const auto height = renderer.getLineHeight(UI_10_FONT_ID);
   const auto top = (pageHeight - height * 3) / 2;
 
+  renderer.clearScreen();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BLUETOOTH_TRANSFER));
   renderer.drawCenteredText(UI_12_FONT_ID, top - 40, tr(STR_BLE_FORGET_HOST), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_BLE_FORGET_HOST_PROMPT));
 

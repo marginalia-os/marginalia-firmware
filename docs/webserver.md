@@ -187,22 +187,24 @@ For power users, you can manage files directly from your terminal using `curl` w
 
 ## Bluetooth File Transfer
 
-Packages and EPUB books can also be transferred without Wi-Fi from **File Transfer > Bluetooth Transfer**. Keep that
-screen open, note the six-digit code, then run:
+Packages, EPUB books, BMP images, diagnostics, and firmware updates can also be transferred without Wi-Fi from
+**File Transfer > Bluetooth Transfer**. Keep that screen open, note the six-digit code, then run:
 
 ```sh
 python3 scripts/ble_transfer.py put-package path/to/package.mpkg.zip --code 123456
 python3 scripts/ble_transfer.py put-book path/to/book.epub --code 123456
 python3 scripts/ble_transfer.py put-bmp path/to/image.bmp --code 123456
+python3 scripts/ble_transfer.py put-firmware path/to/firmware.bin --code 123456
 python3 scripts/ble_transfer.py get-crash-report ./crash_report.txt --code 123456
 python3 scripts/ble_transfer.py get-package-state org.example.package ./package-state.json --code 123456
 ```
 
 The tool scans for `Marginalia Transfer`, streams the file over BLE with windowed receiver ACKs, and waits for the
 device to verify it. Package archives are installed through the package inbox; EPUB files are saved to `/Books`; BMP
-images are saved to `/Pictures`; diagnostic downloads are limited to approved read-only files. After a successful
-code-based upload, the device can save the host so later transfers can omit `--code`. General SD-card browsing still
-uses the web file manager.
+images are saved to `/Pictures`; firmware images are staged at `/.marginalia/ota/firmware.bin`, validated, then flashed
+only after physical confirmation on the device; diagnostic downloads are limited to approved read-only files. After a
+successful code-based package/book/BMP upload, the device can save the host so later transfers can omit `--code`.
+General SD-card browsing still uses the web file manager.
 
 If an upload disconnects while the Bluetooth Transfer screen remains open, rerun the same upload command with
 `--resume` to continue from the partial file kept on the device.

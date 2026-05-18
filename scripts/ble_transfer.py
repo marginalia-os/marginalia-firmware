@@ -34,8 +34,12 @@ DEVICE_NAME = "Marginalia Transfer"
 PROGRESS_PRINT_BYTES = 4096
 PROGRESS_PRINT_SECONDS = 1.0
 DEFAULT_WINDOW_BYTES = 960
+DEFAULT_FIRMWARE_WINDOW_BYTES = 16 * 1024
 MIN_WINDOW_BYTES = 20
 MAX_WINDOW_BYTES = 65536
+DEFAULT_UPLOAD_CHUNK_BYTES = 160
+DEFAULT_FIRMWARE_UPLOAD_CHUNK_BYTES = 500
+DATA_FRAME_HEADER_BYTES = 4
 DEFAULT_DOWNLOAD_CHUNK_BYTES = 160
 MIN_DOWNLOAD_CHUNK_BYTES = 20
 MAX_DOWNLOAD_CHUNK_BYTES = 160
@@ -186,6 +190,8 @@ async def put_file(
         final_status = decode_status(data)
         state = final_status.get("state", "?")
         received = final_status.get("received")
+        if received is None:
+            received = final_status.get("written")
         total = final_status.get("size")
         if received is not None and total:
             now = asyncio.get_running_loop().time()
@@ -323,6 +329,24 @@ async def put_file(
                     print("\nTimed out waiting for device session confirmation.", file=sys.stderr)
                     return 1
 
+                if args.transfer_mode != "response":
+                    data_in_char = client.services.get_characteristic(DATA_IN_UUID)
+                    max_write = getattr(data_in_char, "max_write_without_response_size", None)
+                    if isinstance(max_write, int) and max_write > 0:
+                        max_payload = max_write - DATA_FRAME_HEADER_BYTES
+                        if max_payload <= 0:
+                            print(
+                                f"\nAdapter write-without-response limit is too small for data frames ({max_write} bytes).",
+                                file=sys.stderr,
+                            )
+                            return 1
+                        if args.chunk_size > max_payload:
+                            print(
+                                f"\nCapping chunk size from {args.chunk_size} to {max_payload} bytes for this adapter.",
+                                file=sys.stderr,
+                            )
+                            args.chunk_size = max_payload
+
                 start_put_payload: dict[str, Any] = {
                     "op": "start_put",
                     "kind": kind,
@@ -408,6 +432,9 @@ async def put_file(
                 except (BleakError, OSError) as exc:
                     print(f"\nWarning: failed to stop BLE notifications: {exc}", file=sys.stderr)
     except (BleakError, OSError) as exc:
+        if "restarting" in success_states and final_status.get("state") == "restarting":
+            print(f"\nFirmware update started; device is restarting after flashing {source.name}")
+            return 0
         print(f"\nBLE transfer failed: {exc}", file=sys.stderr)
         return 1
 
@@ -440,6 +467,9 @@ async def put_file(
             warn_pairing_not_saved(final_status, transfer_label="save")
         print(f"Saved {final_status.get('path') or final_status.get('name') or source.name}")
         return 0
+    if "restarting" in success_states and final_status.get("state") == "restarting":
+        print(f"Firmware update started; device is restarting after flashing {source.name}")
+        return 0
     print(f"Transfer failed: {final_status.get('error') or final_status}", file=sys.stderr)
     return 1
 
@@ -471,6 +501,17 @@ async def put_bmp(args: argparse.Namespace) -> int:
         path_arg=args.image,
         required_suffix=".bmp",
         success_states={"saved"},
+    )
+
+
+async def put_firmware(args: argparse.Namespace) -> int:
+    args.no_remember_host = True
+    return await put_file(
+        args,
+        kind="firmware",
+        path_arg=args.firmware,
+        required_suffix=".bin",
+        success_states={"restarting"},
     )
 
 
@@ -806,7 +847,12 @@ def build_parser() -> argparse.ArgumentParser:
     put.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     put.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
     put.add_argument("--resume", action="store_true", help="Resume a matching interrupted upload if the device kept a partial file")
-    put.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
+    put.add_argument(
+        "--chunk-size",
+        type=positive_int,
+        default=DEFAULT_UPLOAD_CHUNK_BYTES,
+        help="Payload bytes per BLE data frame",
+    )
     put.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put.add_argument(
         "--transfer-mode",
@@ -838,7 +884,12 @@ def build_parser() -> argparse.ArgumentParser:
     put_book_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     put_book_parser.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
     put_book_parser.add_argument("--resume", action="store_true", help="Resume a matching interrupted upload if the device kept a partial file")
-    put_book_parser.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
+    put_book_parser.add_argument(
+        "--chunk-size",
+        type=positive_int,
+        default=DEFAULT_UPLOAD_CHUNK_BYTES,
+        help="Payload bytes per BLE data frame",
+    )
     put_book_parser.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put_book_parser.add_argument(
         "--transfer-mode",
@@ -870,7 +921,12 @@ def build_parser() -> argparse.ArgumentParser:
     put_bmp_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
     put_bmp_parser.add_argument("--no-remember-host", action="store_true", help="Do not ask the device to save this host")
     put_bmp_parser.add_argument("--resume", action="store_true", help="Resume a matching interrupted upload if the device kept a partial file")
-    put_bmp_parser.add_argument("--chunk-size", type=positive_int, default=160, help="Payload bytes per BLE data frame")
+    put_bmp_parser.add_argument(
+        "--chunk-size",
+        type=positive_int,
+        default=DEFAULT_UPLOAD_CHUNK_BYTES,
+        help="Payload bytes per BLE data frame",
+    )
     put_bmp_parser.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
     put_bmp_parser.add_argument(
         "--transfer-mode",
@@ -895,6 +951,56 @@ def build_parser() -> argparse.ArgumentParser:
     put_bmp_parser.add_argument("--control-timeout", type=float, default=5.0, help="Control response timeout, in seconds")
     put_bmp_parser.add_argument("--save-timeout", type=float, default=60.0, help="Save result timeout, in seconds")
     put_bmp_parser.add_argument("--debug-stop-after-bytes", type=positive_int, default=0, help=argparse.SUPPRESS)
+
+    put_firmware_parser = sub.add_parser("put-firmware", help="Upload and install a firmware .bin image")
+    put_firmware_parser.add_argument("firmware", help="Path to the firmware .bin image")
+    put_firmware_parser.add_argument("--code", type=six_digit_code, help="Six-digit code shown on the device")
+    put_firmware_parser.add_argument("--force-code", action="store_true", help="Skip trusted-host auth and use --code")
+    put_firmware_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a matching interrupted firmware upload if the device kept a partial file",
+    )
+    put_firmware_parser.add_argument(
+        "--chunk-size",
+        type=positive_int,
+        default=DEFAULT_FIRMWARE_UPLOAD_CHUNK_BYTES,
+        help="Payload bytes per BLE data frame",
+    )
+    put_firmware_parser.add_argument("--chunk-delay", type=float, default=0.0, help="Delay between chunk writes, in seconds")
+    put_firmware_parser.add_argument(
+        "--transfer-mode",
+        choices=("windowed", "response", "no-response"),
+        default="windowed",
+        help="BLE write strategy: windowed is faster with receiver ACKs; response is slowest; no-response is unsafe",
+    )
+    put_firmware_parser.add_argument(
+        "--window-bytes",
+        type=window_bytes_arg,
+        default=DEFAULT_FIRMWARE_WINDOW_BYTES,
+        help="Bytes sent before waiting for receiver progress in windowed mode",
+    )
+    put_firmware_parser.add_argument(
+        "--write-without-response",
+        dest="transfer_mode",
+        action="store_const",
+        const="no-response",
+        help="Deprecated alias for --transfer-mode no-response; may require --chunk-delay",
+    )
+    put_firmware_parser.add_argument("--scan-timeout", type=float, default=8.0, help="BLE scan timeout, in seconds")
+    put_firmware_parser.add_argument(
+        "--control-timeout",
+        type=float,
+        default=5.0,
+        help="Control response timeout, in seconds",
+    )
+    put_firmware_parser.add_argument(
+        "--install-timeout",
+        type=float,
+        default=180.0,
+        help="Firmware update timeout, in seconds",
+    )
+    put_firmware_parser.add_argument("--debug-stop-after-bytes", type=positive_int, default=0, help=argparse.SUPPRESS)
 
     get_crash = sub.add_parser("get-crash-report", help="Download /crash_report.txt")
     get_crash.add_argument("output", nargs="?", default="crash_report.txt", help="Output path")
@@ -944,6 +1050,8 @@ def main() -> int:
     if args.command == "put-bmp":
         args.install_timeout = args.save_timeout
         return asyncio.run(put_bmp(args))
+    if args.command == "put-firmware":
+        return asyncio.run(put_firmware(args))
     if args.command == "get-crash-report":
         return asyncio.run(get_crash_report(args))
     if args.command == "get-package-state":

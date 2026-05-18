@@ -22,13 +22,16 @@ class BleTransferActivity final : public Activity {
     INSTALLING,
     INSTALLED,
     SAVED,
+    FIRMWARE_CONFIRM,
+    UPDATING,
+    RESTARTING,
     SENDING,
     SENT,
     SAVE_HOST_PROMPT,
     FORGET_HOST_PROMPT,
     ERROR
   };
-  enum class TransferKind { NONE, PACKAGE, BOOK, BMP, CRASH_REPORT, PACKAGE_STATE };
+  enum class TransferKind { NONE, PACKAGE, BOOK, BMP, FIRMWARE, CRASH_REPORT, PACKAGE_STATE };
 
   explicit BleTransferActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
   ~BleTransferActivity() override;
@@ -39,7 +42,8 @@ class BleTransferActivity final : public Activity {
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
   bool skipLoopDelay() override {
-    return state_ == State::VERIFYING || state_ == State::INSTALLING || state_ == State::SENDING;
+    return state_ == State::VERIFYING || state_ == State::INSTALLING || state_ == State::UPDATING ||
+           state_ == State::FIRMWARE_CONFIRM || state_ == State::SENDING;
   }
 
   void onBleConnected();
@@ -76,7 +80,10 @@ class BleTransferActivity final : public Activity {
   size_t expectedSize_ = 0;
   size_t receivedBytes_ = 0;
   size_t sentBytes_ = 0;
+  size_t flashWrittenBytes_ = 0;
   size_t lastProgressStatusBytes_ = 0;
+  size_t lastDisplayProgressBytes_ = 0;
+  unsigned int lastFirmwareFlashRenderedPercent_ = 101;
   size_t uploadChunkSize_ = 0;
   size_t uploadAckBytes_ = 0;
   size_t downloadChunkSize_ = 0;
@@ -108,8 +115,11 @@ class BleTransferActivity final : public Activity {
   void publishStatus();
   std::string buildStatusJson() const;
   void completeFinalState(State finalState);
+  void handleFirmwareConfirm();
   void handleSaveHostPrompt();
   void handleForgetHostPrompt();
+  void renderFirmwareConfirm() const;
+  void renderFirmwareUpdating() const;
   void renderSaveHostPrompt() const;
   void renderForgetHostPrompt() const;
 };
