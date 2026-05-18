@@ -171,9 +171,36 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "shortPwrBtn", StrId::STR_CAT_CONTROLS),
 
         // --- System ---
-        SettingInfo::Enum(StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeout,
-                          {StrId::STR_MIN_1, StrId::STR_MIN_5, StrId::STR_MIN_10, StrId::STR_MIN_15, StrId::STR_MIN_30},
-                          "sleepTimeout", StrId::STR_CAT_SYSTEM),
+        SettingInfo::DynamicEnum(
+            StrId::STR_TIME_TO_SLEEP,
+            {StrId::STR_MIN_1, StrId::STR_MIN_3, StrId::STR_MIN_5, StrId::STR_MIN_10, StrId::STR_MIN_15,
+             StrId::STR_MIN_30},
+            [] {
+              switch (SETTINGS.sleepTimeout) {
+                case CrossPointSettings::SLEEP_1_MIN:
+                  return static_cast<uint8_t>(0);
+                case CrossPointSettings::SLEEP_3_MIN:
+                  return static_cast<uint8_t>(1);
+                case CrossPointSettings::SLEEP_5_MIN:
+                  return static_cast<uint8_t>(2);
+                case CrossPointSettings::SLEEP_10_MIN:
+                  return static_cast<uint8_t>(3);
+                case CrossPointSettings::SLEEP_15_MIN:
+                  return static_cast<uint8_t>(4);
+                case CrossPointSettings::SLEEP_30_MIN:
+                default:
+                  return static_cast<uint8_t>(5);
+              }
+            },
+            [](uint8_t v) {
+              static constexpr uint8_t kDisplayToStored[] = {
+                  CrossPointSettings::SLEEP_1_MIN,  CrossPointSettings::SLEEP_3_MIN,  CrossPointSettings::SLEEP_5_MIN,
+                  CrossPointSettings::SLEEP_10_MIN, CrossPointSettings::SLEEP_15_MIN, CrossPointSettings::SLEEP_30_MIN};
+              if (v < (sizeof(kDisplayToStored) / sizeof(kDisplayToStored[0]))) {
+                SETTINGS.sleepTimeout = kDisplayToStored[v];
+              }
+            },
+            "sleepTimeout", StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                             StrId::STR_CAT_SYSTEM),
 
